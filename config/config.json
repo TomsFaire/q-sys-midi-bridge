@@ -1,0 +1,553 @@
+{
+  "qsys": {
+    "host": "10.4.84.20",
+    "port": 1710
+  },
+  "midi": {
+    "deviceName": "MIDI Mix"
+  },
+  "mappings": [
+    {
+      "label": "Mic 1 Fader",
+      "midi": {
+        "type": "cc",
+        "channel": 7,
+        "number": 22
+      },
+      "qsys": {
+        "type": "component_control",
+        "component": "Mic.01.Gain",
+        "control": "gain",
+        "min": -100,
+        "max": 20
+      }
+    },
+    {
+      "label": "Mic 2 Fader",
+      "midi": {
+        "type": "cc",
+        "channel": 7,
+        "number": 23
+      },
+      "qsys": {
+        "type": "component_control",
+        "component": "Mic.02.Gain",
+        "control": "gain",
+        "min": -100,
+        "max": 20
+      }
+    },
+    {
+      "label": "Mic 3 Fader",
+      "midi": {
+        "type": "cc",
+        "channel": 7,
+        "number": 24
+      },
+      "qsys": {
+        "type": "component_control",
+        "component": "Mic.03.Gain",
+        "control": "gain",
+        "min": -100,
+        "max": 20
+      }
+    },
+    {
+      "label": "Mic 4 Fader",
+      "midi": {
+        "type": "cc",
+        "channel": 7,
+        "number": 25
+      },
+      "qsys": {
+        "type": "component_control",
+        "component": "Mic.04.Gain",
+        "control": "gain",
+        "min": -100,
+        "max": 20
+      }
+    },
+    {
+      "label": "Mic 5 Fader",
+      "midi": {
+        "type": "cc",
+        "channel": 7,
+        "number": 26
+      },
+      "qsys": {
+        "type": "component_control",
+        "component": "Styb.Gain",
+        "control": "gain",
+        "min": -100,
+        "max": 20
+      }
+    },
+    {
+      "label": "Mic 6 Fader",
+      "midi": {
+        "type": "cc",
+        "channel": 7,
+        "number": 27
+      },
+      "qsys": {
+        "type": "component_control",
+        "component": "Styb.Gain",
+        "control": "gain",
+        "min": -100,
+        "max": 20
+      }
+    },
+    {
+      "label": "Mic 7 Fader",
+      "midi": {
+        "type": "cc",
+        "channel": 7,
+        "number": 28
+      },
+      "qsys": {
+        "type": "component_control",
+        "component": "ZoomRX.Gain",
+        "control": "gain",
+        "min": -100,
+        "max": 20
+      }
+    },
+    {
+      "label": "Mic 8 Fader",
+      "midi": {
+        "type": "cc",
+        "channel": 7,
+        "number": 29
+      },
+      "qsys": {
+        "type": "component_control",
+        "component": "Slides.Gain",
+        "control": "gain",
+        "min": -100,
+        "max": 20
+      }
+    },
+    {
+      "label": "Mains Master",
+      "midi": {
+        "type": "cc",
+        "channel": 7,
+        "number": 30
+      },
+      "qsys": {
+        "type": "component_control",
+        "component": "Bus.Mixer",
+        "control": "output.1.gain",
+        "min": -100,
+        "max": 20
+      }
+    },
+    {
+      "label": "Knob A 1",
+      "midi": {
+        "type": "cc",
+        "channel": 4,
+        "number": 22
+      },
+      "qsys": {
+        "type": "component_control",
+        "component": "Analog.Inputs",
+        "control": "channel.1.input.gain",
+        "min": -100,
+        "max": 10
+      }
+    },
+    {
+      "label": "Knob A 2",
+      "midi": {
+        "type": "cc",
+        "channel": 4,
+        "number": 23
+      },
+      "qsys": {
+        "type": "component_control",
+        "component": "Analog.Inputs",
+        "control": "channel.2.input.gain",
+        "min": -100,
+        "max": 10
+      }
+    },
+    {
+      "label": "Knob A 3",
+      "midi": {
+        "type": "cc",
+        "channel": 4,
+        "number": 24
+      },
+      "qsys": {
+        "type": "component_control",
+        "component": "Analog.Inputs",
+        "control": "channel.3.input.gain",
+        "min": -100,
+        "max": 10
+      }
+    },
+    {
+      "label": "Knob A 4",
+      "midi": {
+        "type": "cc",
+        "channel": 4,
+        "number": 25
+      },
+      "qsys": {
+        "type": "component_control",
+        "component": "Analog.Inputs",
+        "control": "channel.4.input.gain",
+        "min": -100,
+        "max": 10
+      }
+    },
+    {
+      "label": "Knob A 5",
+      "midi": {
+        "type": "cc",
+        "channel": 4,
+        "number": 26
+      },
+      "qsys": {
+        "type": "component_control",
+        "component": "Analog.Inputs",
+        "control": "channel.5.input.gain",
+        "min": -100,
+        "max": 10
+      }
+    },
+    {
+      "label": "Knob A 6",
+      "midi": {
+        "type": "cc",
+        "channel": 4,
+        "number": 27
+      },
+      "qsys": {
+        "type": "component_control",
+        "component": "Analog.Inputs",
+        "control": "channel.6.input.gain",
+        "min": -100,
+        "max": 10
+      }
+    },
+    {
+      "label": "Knob A 7",
+      "midi": {
+        "type": "cc",
+        "channel": 4,
+        "number": 28
+      },
+      "qsys": {
+        "type": "component_control",
+        "component": "Analog.Inputs",
+        "control": "channel.7.input.gain",
+        "min": -100,
+        "max": 10
+      }
+    },
+    {
+      "label": "Knob A 8",
+      "midi": {
+        "type": "cc",
+        "channel": 4,
+        "number": 29
+      },
+      "qsys": {
+        "type": "component_control",
+        "component": "Analog.Inputs",
+        "control": "channel.8.input.gain",
+        "min": -100,
+        "max": 10
+      }
+    },
+    {
+      "label": "Knob B 1",
+      "midi": {
+        "type": "cc",
+        "channel": 5,
+        "number": 22
+      },
+      "qsys": {
+        "type": "component_control",
+        "component": "Mic.01.HPF",
+        "control": "frequency",
+        "min": -100,
+        "max": 10
+      }
+    },
+    {
+      "label": "Knob B 2",
+      "midi": {
+        "type": "cc",
+        "channel": 5,
+        "number": 23
+      },
+      "qsys": {
+        "type": "component_control",
+        "component": "Mic.02.HPF",
+        "control": "frequency",
+        "min": -100,
+        "max": 10
+      }
+    },
+    {
+      "label": "Knob B 3",
+      "midi": {
+        "type": "cc",
+        "channel": 5,
+        "number": 24
+      },
+      "qsys": {
+        "type": "component_control",
+        "component": "Mic.03.HPF",
+        "control": "frequency",
+        "min": -100,
+        "max": 10
+      }
+    },
+    {
+      "label": "Knob B 4",
+      "midi": {
+        "type": "cc",
+        "channel": 5,
+        "number": 25
+      },
+      "qsys": {
+        "type": "component_control",
+        "component": "Mic.04.HPF",
+        "control": "frequency",
+        "min": -100,
+        "max": 10
+      }
+    },
+    {
+      "label": "Knob B 5",
+      "midi": {
+        "type": "cc",
+        "channel": 5,
+        "number": 26
+      },
+      "qsys": {
+        "type": "component_control",
+        "component": "Mic.05.HPF",
+        "control": "frequency",
+        "min": -100,
+        "max": 10
+      }
+    },
+    {
+      "label": "Mic 1 Mute",
+      "midi": {
+        "type": "cc",
+        "channel": 1,
+        "number": 22
+      },
+      "qsys": {
+        "type": "toggle",
+        "component": "Input.Mixer",
+        "control": "input.1.mute"
+      }
+    },
+    {
+      "label": "Mic 2 Mute",
+      "midi": {
+        "type": "cc",
+        "channel": 1,
+        "number": 23
+      },
+      "qsys": {
+        "type": "toggle",
+        "component": "Input.Mixer",
+        "control": "input.2.mute"
+      }
+    },
+    {
+      "label": "Mic 3 Mute",
+      "midi": {
+        "type": "cc",
+        "channel": 1,
+        "number": 24
+      },
+      "qsys": {
+        "type": "toggle",
+        "component": "Input.Mixer",
+        "control": "input.3.mute"
+      }
+    },
+    {
+      "label": "Mic 4 Mute",
+      "midi": {
+        "type": "cc",
+        "channel": 1,
+        "number": 25
+      },
+      "qsys": {
+        "type": "toggle",
+        "component": "Input.Mixer",
+        "control": "input.4.mute"
+      }
+    },
+    {
+      "label": "Mic 5 Mute",
+      "midi": {
+        "type": "cc",
+        "channel": 1,
+        "number": 26
+      },
+      "qsys": {
+        "type": "toggle",
+        "component": "Input.Mixer",
+        "control": "input.5.mute"
+      }
+    },
+    {
+      "label": "Mic 6 Mute",
+      "midi": {
+        "type": "cc",
+        "channel": 1,
+        "number": 27
+      },
+      "qsys": {
+        "type": "toggle",
+        "component": "Input.Mixer",
+        "control": "input.6.mute"
+      }
+    },
+    {
+      "label": "Mic 7 Mute",
+      "midi": {
+        "type": "cc",
+        "channel": 1,
+        "number": 28
+      },
+      "qsys": {
+        "type": "toggle",
+        "component": "Input.Mixer",
+        "control": "input.7.mute"
+      }
+    },
+    {
+      "label": "Mic 8 Mute",
+      "midi": {
+        "type": "cc",
+        "channel": 1,
+        "number": 29
+      },
+      "qsys": {
+        "type": "toggle",
+        "component": "Input.Mixer",
+        "control": "input.8.mute"
+      }
+    },
+    {
+      "label": "Mains Mute",
+      "midi": {
+        "type": "note_on",
+        "channel": 1,
+        "number": 25
+      },
+      "qsys": {
+        "type": "toggle",
+        "component": "Bus.Mixer",
+        "control": "output.1.mute"
+      }
+    },
+    {
+      "label": "ZoomTX Mute",
+      "midi": {
+        "type": "note_on",
+        "channel": 1,
+        "number": 26
+      },
+      "qsys": {
+        "type": "toggle",
+        "component": "Bus.Mixer",
+        "control": "output.2.mute"
+      }
+    },
+    {
+      "label": "Solo",
+      "midi": {
+        "type": "note_on",
+        "channel": 1,
+        "number": 27
+      },
+      "qsys": {
+        "type": "toggle",
+        "component": "Bus.Mixer",
+        "control": "output.3.mute"
+      }
+    }
+  ],
+  "feedback": {
+    "enabled": true,
+    "mute_leds": [
+      {
+        "component": "Input.Mixer",
+        "control": "input.1.mute",
+        "midi": {
+          "channel": 1,
+          "note": 1
+        }
+      },
+      {
+        "component": "Input.Mixer",
+        "control": "input.2.mute",
+        "midi": {
+          "channel": 1,
+          "note": 4
+        }
+      },
+      {
+        "component": "Input.Mixer",
+        "control": "input.3.mute",
+        "midi": {
+          "channel": 1,
+          "note": 7
+        }
+      },
+      {
+        "component": "Input.Mixer",
+        "control": "input.4.mute",
+        "midi": {
+          "channel": 1,
+          "note": 10
+        }
+      },
+      {
+        "component": "Input.Mixer",
+        "control": "input.5.mute",
+        "midi": {
+          "channel": 1,
+          "note": 13
+        }
+      },
+      {
+        "component": "Input.Mixer",
+        "control": "input.6.mute",
+        "midi": {
+          "channel": 1,
+          "note": 16
+        }
+      },
+      {
+        "component": "Input.Mixer",
+        "control": "input.7.mute",
+        "midi": {
+          "channel": 1,
+          "note": 19
+        }
+      },
+      {
+        "component": "Input.Mixer",
+        "control": "input.8.mute",
+        "midi": {
+          "channel": 1,
+          "note": 22
+        }
+      }
+    ]
+  }
+}

@@ -1,0 +1,98 @@
+Section,Signal Path,Block Type,Component Name,Notes
+Mic Inputs,Mic 01,Gain,Mic.01.Gain,Already named
+Mic Inputs,Mic 01,High-Pass Filter,Mic.01.HPF,Already named
+Mic Inputs,Mic 01,Low-Pass Filter,Mic.01.LPF,Already named
+Mic Inputs,Mic 01,Parametric Equalizer,Mic.01.EQ,Already named
+Mic Inputs,Mic 02,Gain,Mic.02.Gain,Already named
+Mic Inputs,Mic 02,High-Pass Filter,Mic.02.HPF,Already named
+Mic Inputs,Mic 02,Low-Pass Filter,Mic.02.LPF,Already named
+Mic Inputs,Mic 02,Parametric Equalizer,Mic.02.EQ,Already named
+Mic Inputs,Mic 03,Gain,Mic.03.Gain,Already named
+Mic Inputs,Mic 03,High-Pass Filter,Mic.03.HPF,Already named
+Mic Inputs,Mic 03,Low-Pass Filter,Mic.03.LPF,Already named
+Mic Inputs,Mic 03,Parametric Equalizer,Mic.03.EQ,Already named
+Mic Inputs,Mic 04,Gain,Mic.04.Gain,Already named
+Mic Inputs,Mic 04,High-Pass Filter,Mic.04.HPF,Already named
+Mic Inputs,Mic 04,Low-Pass Filter,Mic.04.LPF,Already named
+Mic Inputs,Mic 04,Parametric Equalizer,Mic.04.EQ,Already named
+Mic Inputs,Mic 05,Gain,Mic.05.Gain,Already named
+Mic Inputs,Mic 05,High-Pass Filter,Mic.05.HPF,Already named
+Mic Inputs,Mic 05,Low-Pass Filter,Mic.05.LPF,Already named
+Mic Inputs,Mic 05,Parametric Equalizer,Mic.05.EQ,Already named
+Mic Inputs,Mic 06,Gain,Mic.06.Gain,Already named
+Mic Inputs,Mic 06,High-Pass Filter,Mic.06.HPF,Already named
+Mic Inputs,Mic 06,Low-Pass Filter,Mic.06.LPF,Already named
+Mic Inputs,Mic 06,Parametric Equalizer,Mic.06.EQ,Already named
+Mic Inputs,Mic 07,Gain,Mic.07.Gain,Already named
+Mic Inputs,Mic 07,High-Pass Filter,Mic.07.HPF,Already named
+Mic Inputs,Mic 07,Low-Pass Filter,Mic.07.LPF,Already named
+Mic Inputs,Mic 07,Parametric Equalizer,Mic.07.EQ,Already named
+Mic Inputs,Mic 08,Gain,Mic.08.Gain,Already named
+Mic Inputs,Mic 08,High-Pass Filter,Mic.08.HPF,Already named
+Mic Inputs,Mic 08,Low-Pass Filter,Mic.08.LPF,Already named
+Mic Inputs,Mic 08,Parametric Equalizer,Mic.08.EQ,Already named
+Stereo Inputs,STBY (STYBL/R),Stereo Gain,Stby.Gain,Stage-by / standby stereo source
+Stereo Inputs,STBY (STYBL/R),Stereo High-Pass Filter,Stby.HPF,
+Stereo Inputs,STBY (STYBL/R),Stereo Low-Pass Filter,Stby.LPF,
+Stereo Inputs,STBY (STYBL/R),Stereo Parametric Equalizer,Stby.EQ,
+Stereo Inputs,Spotify (SpotfyL/R),Stereo Gain,Sptfy.Gain,
+Stereo Inputs,Spotify (SpotfyL/R),Stereo High-Pass Filter,Sptfy.HPF,
+Stereo Inputs,Spotify (SpotfyL/R),Stereo Low-Pass Filter,Sptfy.LPF,
+Stereo Inputs,Spotify (SpotfyL/R),Stereo Parametric Equalizer,Sptfy.EQ,
+Stereo Inputs,Zoom RX (ZoomL/R),Stereo Gain,ZoomRX.Gain,Zoom computer audio return
+Stereo Inputs,Zoom RX (ZoomL/R),Stereo High-Pass Filter,ZoomRX.HPF,
+Stereo Inputs,Zoom RX (ZoomL/R),Stereo Low-Pass Filter,ZoomRX.LPF,
+Stereo Inputs,Zoom RX (ZoomL/R),Stereo Parametric Equalizer,ZoomRX.EQ,
+Stereo Inputs,Slides (SlidesL/R),Stereo Gain,Slides.Gain,Presentation/slides audio
+Stereo Inputs,Slides (SlidesL/R),Stereo High-Pass Filter,Slides.HPF,
+Stereo Inputs,Slides (SlidesL/R),Stereo Low-Pass Filter,Slides.LPF,
+Stereo Inputs,Slides (SlidesL/R),Stereo Parametric Equalizer,Slides.EQ,
+Bus Processing,MicZoom (mono),Gain,MicZoom.Gain,Summed mic bus feeding Zoom output
+Bus Processing,MicZoom (mono),High-Pass Filter,MicZoom.HPF,
+Bus Processing,MicZoom (mono),Low-Pass Filter,MicZoom.LPF,
+Bus Processing,MicZoom (mono),Compressor,MicZoom.Comp,
+Bus Processing,MicZoom (mono),Parametric Equalizer,MicZoom.EQ,
+Bus Processing,MicZoom (mono),Notch Feedback Controller,MicZoom.AFC,AFC = Automatic Feedback Controller
+Bus Processing,MicZoom (mono),Gate,MicZoom.Gate,
+Bus Processing,MicRoom (mono),Gain,MicRoom.Gain,Summed mic bus feeding room speakers
+Bus Processing,MicRoom (mono),High-Pass Filter,MicRoom.HPF,
+Bus Processing,MicRoom (mono),Low-Pass Filter,MicRoom.LPF,
+Bus Processing,MicRoom (mono),Compressor,MicRoom.Comp,
+Bus Processing,MicRoom (mono),Parametric Equalizer,MicRoom.EQ,
+Bus Processing,MicRoom (mono),Notch Feedback Controller,MicRoom.AFC,
+Bus Processing,MicRoom (mono),Gate,MicRoom.Gate,
+Bus Processing,Music → Room,Stereo Gain,MusicRoom.Gain,Music/background for room mix
+Bus Processing,Music → Room,Stereo High-Pass Filter,MusicRoom.HPF,
+Bus Processing,Music → Room,Stereo Low-Pass Filter,MusicRoom.LPF,
+Bus Processing,Music → Room,Stereo Parametric Equalizer,MusicRoom.EQ,
+Bus Processing,Music → Zoom,Stereo Gain,MusicZoom.Gain,Music/background for Zoom mix
+Bus Processing,Music → Zoom,Stereo High-Pass Filter,MusicZoom.HPF,
+Bus Processing,Music → Zoom,Stereo Low-Pass Filter,MusicZoom.LPF,
+Bus Processing,Music → Zoom,Stereo Parametric Equalizer,MusicZoom.EQ,
+Bus Processing,Slides → Room,Stereo Gain,SlidesRoom.Gain,Presentation audio for room mix
+Bus Processing,Slides → Room,Stereo High-Pass Filter,SlidesRoom.HPF,
+Bus Processing,Slides → Room,Stereo Low-Pass Filter,SlidesRoom.LPF,
+Bus Processing,Slides → Room,Stereo Parametric Equalizer,SlidesRoom.EQ,
+Bus Processing,Slides → Zoom,Stereo Gain,SlidesZoom.Gain,Presentation audio for Zoom mix
+Bus Processing,Slides → Zoom,Stereo High-Pass Filter,SlidesZoom.HPF,
+Bus Processing,Slides → Zoom,Stereo Low-Pass Filter,SlidesZoom.LPF,
+Bus Processing,Slides → Zoom,Stereo Parametric Equalizer,SlidesZoom.EQ,
+Bus Processing,ZoomLRX / ZoomRRX,Stereo Gain,ZoomRtn.Gain,Zoom full-mix return into room
+Bus Processing,ZoomLRX / ZoomRRX,Stereo High-Pass Filter,ZoomRtn.HPF,
+Bus Processing,ZoomLRX / ZoomRRX,Stereo Low-Pass Filter,ZoomRtn.LPF,
+Bus Processing,ZoomLRX / ZoomRRX,Stereo Parametric Equalizer,ZoomRtn.EQ,
+Output Chains,AUX1 → Mains,Stereo Gain,Mains.Gain,Main room speaker output
+Output Chains,AUX1 → Mains,Stereo High-Pass Filter,Mains.HPF,
+Output Chains,AUX1 → Mains,Stereo Low-Pass Filter,Mains.LPF,
+Output Chains,AUX1 → Mains,Stereo Parametric Equalizer,Mains.EQ,
+Output Chains,AUX1 → Mains,Standard Delay,Mains.Delay,Speaker alignment delay
+Output Chains,AUX2 → ZoomTX,Stereo Gain,ZoomTX.Gain,Audio sent to Zoom
+Output Chains,AUX2 → ZoomTX,Stereo High-Pass Filter,ZoomTX.HPF,
+Output Chains,AUX2 → ZoomTX,Stereo Low-Pass Filter,ZoomTX.LPF,
+Output Chains,AUX2 → ZoomTX,Stereo Parametric Equalizer,ZoomTX.EQ,
+Output Chains,AUX2 → ZoomTX,Standard Delay,ZoomTX.Delay,
+Output Chains,AUX3 → Rec,Stereo Gain,Rec.Gain,Recording output
+Output Chains,AUX3 → Rec,Stereo High-Pass Filter,Rec.HPF,
+Output Chains,AUX3 → Rec,Stereo Low-Pass Filter,Rec.LPF,
+Output Chains,AUX3 → Rec,Stereo Parametric Equalizer,Rec.EQ,
+Output Chains,AUX3 → Rec,Standard Delay,Rec.Delay,

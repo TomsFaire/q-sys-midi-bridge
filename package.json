@@ -1,0 +1,45 @@
+{
+  "name": "midi-qsys-bridge",
+  "version": "0.1.0",
+  "description": "Akai MIDImix → Q-Sys FOH Mixer bridge",
+  "main": "dist/main/index.js",
+  "scripts": {
+    "start": "npm run build && electron .",
+    "build": "tsc",
+    "watch": "tsc --watch",
+    "rebuild-midi": "electron-rebuild -f -w @julusian/midi",
+    "package": "npm run build && electron-builder --mac"
+  },
+  "devDependencies": {
+    "@electron/rebuild": "^3",
+    "@types/node": "^20",
+    "electron": "^33",
+    "electron-builder": "^24",
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "@julusian/midi": "^3"
+  },
+  "build": {
+    "appId": "com.tomsfaire.midi-qsys-bridge",
+    "productName": "MIDI Q-Sys Bridge",
+    "files": [
+      "dist/**/*",
+      "src/renderer/**/*",
+      "config/**/*",
+      "assets/**/*"
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "mac": {
+      "target": [
+        { "target": "dmg", "arch": ["arm64"] }
+      ],
+      "category": "public.app-category.utilities",
+      "identity": null,
+      "hardenedRuntime": false
+    },
+    "npmRebuild": true
+  }
+}

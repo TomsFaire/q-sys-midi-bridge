@@ -1,0 +1,692 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Configure Mappings</title>
+  <style>
+    :root {
+      --bg: #f5f5f7;
+      --surface: #ffffff;
+      --border: #d1d1d6;
+      --text: #1c1c1e;
+      --text-dim: #6e6e73;
+      --accent: #007aff;
+      --red: #ff3b30;
+      --green: #34c759;
+      --orange: #ff9500;
+      --group-bg: #e9e9ee;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-size: 13px;
+      color: var(--text);
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: var(--bg);
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* ── Header ── */
+    header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 14px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+      -webkit-app-region: drag;
+    }
+    header > * { -webkit-app-region: no-drag; }
+
+    header h1 { font-size: 14px; font-weight: 600; flex: 1; }
+
+    .status-pill {
+      display: flex; align-items: center; gap: 5px;
+      padding: 3px 8px; border-radius: 10px;
+      background: var(--bg); font-size: 11px; color: var(--text-dim);
+    }
+    .dot {
+      width: 7px; height: 7px; border-radius: 50%;
+      background: var(--text-dim); flex-shrink: 0;
+    }
+    .dot.ok  { background: var(--green); }
+    .dot.err { background: var(--red); }
+
+    button { cursor: pointer; border: none; font-size: 12px; font-family: inherit; }
+    .btn { padding: 5px 12px; border-radius: 6px; font-weight: 500; }
+    .btn-ghost { background: var(--bg); color: var(--text); border: 1px solid var(--border); }
+    .btn-ghost:hover { background: var(--border); }
+    .btn-primary { background: var(--accent); color: white; }
+    .btn-primary:hover { background: #005ecb; }
+    .btn-primary:disabled { background: var(--border); color: var(--text-dim); cursor: not-allowed; }
+    .btn-warn { background: var(--orange); color: white; }
+    .btn-warn:hover { background: #cc7800; }
+    .btn-warn:disabled { background: var(--border); color: var(--text-dim); cursor: not-allowed; }
+
+    /* ── Tabs ── */
+    .tabs {
+      display: flex; gap: 2px;
+      padding: 0 14px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .tab {
+      padding: 7px 11px; background: none; color: var(--text-dim);
+      border-bottom: 2px solid transparent; margin-bottom: -1px;
+      font-size: 12px; font-weight: 500;
+    }
+    .tab:hover { color: var(--text); }
+    .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+    /* ── Filter bar ── */
+    .filterbar {
+      display: flex; align-items: center; gap: 8px;
+      padding: 6px 14px;
+      background: var(--bg);
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .filterbar label { font-size: 11px; color: var(--text-dim); }
+    .filterbar input[type=search] {
+      padding: 4px 8px; border: 1px solid var(--border);
+      border-radius: 5px; width: 180px; font-size: 12px;
+      background: var(--surface);
+    }
+    .filterbar input[type=search]:focus { outline: 2px solid var(--accent); border-color: transparent; }
+    #count-label { font-size: 11px; color: var(--text-dim); margin-left: auto; }
+
+    /* ── Table ── */
+    .table-wrap {
+      flex: 1; overflow-y: auto;
+    }
+
+    table {
+      width: 100%; border-collapse: collapse;
+      table-layout: fixed;
+    }
+
+    colgroup col:nth-child(1) { width: 120px; }  /* label */
+    colgroup col:nth-child(2) { width: 72px; }   /* type */
+    colgroup col:nth-child(3) { width: 210px; }  /* component */
+    colgroup col:nth-child(4) { width: 210px; }  /* control */
+    colgroup col:nth-child(5) { width: 68px; }   /* min */
+    colgroup col:nth-child(6) { width: 68px; }   /* max */
+    colgroup col:nth-child(7) { width: 36px; }   /* clear */
+
+    thead { position: sticky; top: 0; z-index: 10; }
+    thead tr { background: var(--surface); }
+
+    th {
+      padding: 6px 10px; text-align: left;
+      font-size: 10px; font-weight: 600;
+      text-transform: uppercase; letter-spacing: 0.4px;
+      color: var(--text-dim); border-bottom: 1px solid var(--border);
+    }
+
+    td { padding: 4px 6px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+
+    tr.group-row { background: var(--group-bg); }
+    tr.group-row td {
+      padding: 3px 10px;
+      font-size: 10px; font-weight: 700;
+      text-transform: uppercase; letter-spacing: 0.6px;
+      color: var(--text-dim);
+    }
+
+    tr.ctrl-row:hover { background: #f0f0f5; }
+    tr.ctrl-row.assigned { background: #f0fff4; }
+    tr.ctrl-row.assigned:hover { background: #e6ffe8; }
+
+    /* Type badges */
+    .badge {
+      display: inline-block; padding: 2px 7px; border-radius: 4px;
+      font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px;
+    }
+    .badge-fader  { background: #d1f0d1; color: #1a6b1a; }
+    .badge-knob   { background: #d4e5ff; color: #003fa8; }
+    .badge-toggle { background: #ffe5d4; color: #a83000; }
+
+    /* Selects & inputs */
+    select, input[type=text], input[type=number] {
+      width: 100%; padding: 3px 5px;
+      border: 1px solid var(--border); border-radius: 4px;
+      background: var(--surface); font-size: 12px;
+      color: var(--text); font-family: inherit;
+    }
+    select:focus, input:focus { outline: 2px solid var(--accent); border-color: transparent; }
+    select:disabled, input:disabled {
+      background: var(--bg); color: var(--text-dim); cursor: default;
+    }
+    input[type=number] { -moz-appearance: textfield; }
+    input[type=number]::-webkit-inner-spin-button { opacity: 0.5; }
+
+    .td-label { font-size: 12px; font-weight: 500; padding-left: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .td-type  { text-align: center; }
+    .td-clear { text-align: center; }
+
+    .clear-btn {
+      background: none; color: var(--text-dim); font-size: 13px;
+      padding: 2px 5px; border-radius: 3px;
+    }
+    .clear-btn:hover { background: #ffe5e5; color: var(--red); }
+
+    .hidden { display: none; }
+
+    /* Control input: text + datalist combo */
+    .ctrl-input-wrap { position: relative; }
+    .ctrl-input-wrap input[type=text] { padding-right: 20px; }
+
+    /* ── Footer ── */
+    footer {
+      display: flex; align-items: center; gap: 10px;
+      padding: 9px 14px;
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    #save-status {
+      font-size: 12px; color: var(--text-dim);
+    }
+    #save-status.ok  { color: var(--green); }
+    #save-status.err { color: var(--red); }
+    footer span.spacer { flex: 1; }
+    footer .hint { font-size: 11px; color: var(--text-dim); }
+
+    /* ── Overlay ── */
+    #overlay {
+      position: fixed; inset: 0;
+      background: rgba(245,245,247,0.88);
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      gap: 10px; z-index: 100;
+    }
+    #overlay p { font-size: 14px; color: var(--text-dim); }
+    #overlay .spinner {
+      width: 28px; height: 28px;
+      border: 3px solid var(--border); border-top-color: var(--accent);
+      border-radius: 50%; animation: spin 0.7s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>Control Assignments</h1>
+  <div class="status-pill">
+    <span class="dot" id="status-dot"></span>
+    <span id="status-text">Connecting…</span>
+  </div>
+  <button class="btn btn-ghost" id="refresh-btn">↺ Refresh Q-Sys</button>
+</header>
+
+<div class="tabs" id="tabs">
+  <button class="tab active" data-group="all">All <span class="tab-ct" data-group="all"></span></button>
+  <button class="tab" data-group="Faders">Faders</button>
+  <button class="tab" data-group="Knobs A">Knobs A</button>
+  <button class="tab" data-group="Knobs B">Knobs B</button>
+  <button class="tab" data-group="Knobs C">Knobs C</button>
+  <button class="tab" data-group="Mutes">Mutes</button>
+  <button class="tab" data-group="Rec Arms">Rec Arms</button>
+  <button class="tab" data-group="Buttons">Buttons</button>
+</div>
+
+<div class="filterbar">
+  <label for="filter-input">Filter</label>
+  <input type="search" id="filter-input" placeholder="e.g. Fader 1, Mute…">
+  <span id="count-label"></span>
+</div>
+
+<div class="table-wrap">
+  <table>
+    <colgroup>
+      <col><col><col><col><col><col><col>
+    </colgroup>
+    <thead>
+      <tr>
+        <th>Control</th>
+        <th style="text-align:center">Type</th>
+        <th>Q-Sys Component</th>
+        <th>Control Name</th>
+        <th>Min</th>
+        <th>Max</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody id="tbody"></tbody>
+  </table>
+</div>
+
+<footer>
+  <button class="btn btn-primary" id="save-btn" disabled>Save</button>
+  <button class="btn btn-warn"    id="save-restart-btn" disabled>Save &amp; Apply</button>
+  <span id="save-status"></span>
+  <span class="spacer"></span>
+  <span class="hint">Restart required to apply changes to the live bridge</span>
+</footer>
+
+<div id="overlay">
+  <div class="spinner"></div>
+  <p id="overlay-msg">Loading…</p>
+</div>
+
+<script>
+/* global require */
+const { ipcRenderer } = require('electron')
+
+// ── State ────────────────────────────────────────────────────────────────────
+
+let physicalControls = []
+let components = []                   // [{name, type}]
+const ctrlCache = new Map()           // componentName → [{name, isBoolean}]
+// assignments: controlId → {component, controlName, min, max, label}
+const assignments = new Map()
+
+let activeGroup = 'all'
+let filterText  = ''
+
+// ── Init ─────────────────────────────────────────────────────────────────────
+
+async function init() {
+  setOverlay('Loading physical controls…')
+  physicalControls = await ipcRenderer.invoke('cfg:get-physical-controls')
+
+  setOverlay('Loading existing assignments…')
+  try {
+    const cfg = await ipcRenderer.invoke('cfg:load-config')
+    for (const m of cfg.mappings ?? []) {
+      const pc = physicalControls.find(p =>
+        p.midi.type === m.midi.type &&
+        p.midi.channel === m.midi.channel &&
+        p.midi.number === m.midi.number
+      )
+      if (pc) {
+        assignments.set(pc.id, {
+          component:   m.qsys.component  ?? '',
+          controlName: m.qsys.control    ?? '',
+          min:         m.qsys.min        ?? -100,
+          max:         m.qsys.max        ?? 10,
+          label:       m.label           ?? pc.label,
+        })
+      }
+    }
+  } catch (e) {
+    console.warn('Could not load config:', e.message)
+  }
+
+  setOverlay('Connecting to Q-Sys…')
+  await refreshQsys()
+
+  hideOverlay()
+  document.getElementById('save-btn').disabled = false
+  document.getElementById('save-restart-btn').disabled = false
+  renderTable()
+}
+
+// ── Q-Sys discovery ───────────────────────────────────────────────────────────
+
+async function refreshQsys() {
+  const dot  = document.getElementById('status-dot')
+  const text = document.getElementById('status-text')
+  try {
+    const status = await ipcRenderer.invoke('cfg:get-qsys-status')
+    if (status.connected) {
+      dot.className  = 'dot ok'
+      text.textContent = `Connected  (${status.host})`
+      components = await ipcRenderer.invoke('cfg:discover-components')
+      ctrlCache.clear()
+    } else {
+      dot.className  = 'dot err'
+      text.textContent = 'Not connected — check Q-Sys host'
+      components = []
+    }
+  } catch (e) {
+    dot.className  = 'dot err'
+    text.textContent = 'Error: ' + e.message
+    components = []
+  }
+}
+
+async function getControlsFor(componentName) {
+  if (ctrlCache.has(componentName)) return ctrlCache.get(componentName)
+  let controls = []
+  try {
+    controls = await ipcRenderer.invoke('cfg:get-component-controls', componentName)
+  } catch { /* fallback: empty, user types manually */ }
+  ctrlCache.set(componentName, controls)
+  return controls
+}
+
+// ── Render ────────────────────────────────────────────────────────────────────
+
+function renderTable() {
+  const tbody = document.getElementById('tbody')
+  tbody.innerHTML = ''
+
+  const lf = filterText.toLowerCase()
+  let shown = 0
+  let lastGroup = null
+
+  for (const pc of physicalControls) {
+    if (activeGroup !== 'all' && pc.group !== activeGroup) continue
+    if (lf && !pc.label.toLowerCase().includes(lf) && !pc.id.toLowerCase().includes(lf)) continue
+
+    if (pc.group !== lastGroup) {
+      const gr = tbody.insertRow()
+      gr.className = 'group-row'
+      gr.dataset.group = pc.group
+      gr.insertCell().colSpan = 7
+      gr.cells[0].textContent = pc.group
+      lastGroup = pc.group
+    }
+
+    const a = assignments.get(pc.id)
+    const isToggle = pc.controlType === 'toggle'
+    const row = tbody.insertRow()
+    row.className = 'ctrl-row' + (a?.component ? ' assigned' : '')
+    row.dataset.id = pc.id
+
+    // Label
+    const tdLabel = row.insertCell()
+    tdLabel.className = 'td-label'
+    tdLabel.title = `MIDI: ${pc.midi.type} ch${pc.midi.channel} #${pc.midi.number}`
+    tdLabel.textContent = pc.label
+
+    // Type badge
+    const tdType = row.insertCell()
+    tdType.className = 'td-type'
+    tdType.innerHTML = `<span class="badge badge-${pc.controlType}">${pc.controlType}</span>`
+
+    // Component select
+    const tdComp = row.insertCell()
+    const compSel = document.createElement('select')
+    compSel.dataset.id = pc.id
+    compSel.className = 'comp-sel'
+    compSel.innerHTML =
+      '<option value="">— unassigned —</option>' +
+      components.map(c =>
+        `<option value="${esc(c.name)}"${a?.component === c.name ? ' selected' : ''}>${esc(c.name)}</option>`
+      ).join('')
+    tdComp.appendChild(compSel)
+
+    // Control name (text + datalist)
+    const tdCtrl = row.insertCell()
+    const dlId = `dl-${pc.id}`
+    const ctrlInput = document.createElement('input')
+    ctrlInput.type = 'text'
+    ctrlInput.dataset.id = pc.id
+    ctrlInput.className = 'ctrl-input'
+    ctrlInput.placeholder = a?.component ? 'type or pick…' : '—'
+    ctrlInput.value = a?.controlName ?? ''
+    ctrlInput.disabled = !a?.component
+    ctrlInput.setAttribute('list', dlId)
+    const dl = document.createElement('datalist')
+    dl.id = dlId
+    tdCtrl.appendChild(ctrlInput)
+    tdCtrl.appendChild(dl)
+
+    // Min / Max
+    const tdMin = row.insertCell()
+    const minInp = document.createElement('input')
+    minInp.type = 'number'; minInp.step = 'any'
+    minInp.dataset.id = pc.id; minInp.className = 'min-inp'
+    minInp.value = String(a?.min ?? -100)
+    minInp.disabled = isToggle || !a?.component
+    if (isToggle) { minInp.style.visibility = 'hidden' }
+    tdMin.appendChild(minInp)
+
+    const tdMax = row.insertCell()
+    const maxInp = document.createElement('input')
+    maxInp.type = 'number'; maxInp.step = 'any'
+    maxInp.dataset.id = pc.id; maxInp.className = 'max-inp'
+    maxInp.value = String(a?.max ?? 10)
+    maxInp.disabled = isToggle || !a?.component
+    if (isToggle) { maxInp.style.visibility = 'hidden' }
+    tdMax.appendChild(maxInp)
+
+    // Clear
+    const tdClear = row.insertCell()
+    tdClear.className = 'td-clear'
+    const clearBtn = document.createElement('button')
+    clearBtn.className = 'clear-btn'
+    clearBtn.dataset.id = pc.id
+    clearBtn.textContent = '✕'
+    clearBtn.title = 'Clear assignment'
+    clearBtn.disabled = !a?.component
+    tdClear.appendChild(clearBtn)
+
+    // If assigned, populate datalist immediately (use cache if available)
+    if (a?.component && ctrlCache.has(a.component)) {
+      populateDatalist(dl, ctrlCache.get(a.component))
+    } else if (a?.component) {
+      getControlsFor(a.component).then(ctrls => populateDatalist(dl, ctrls))
+    }
+
+    shown++
+  }
+
+  document.getElementById('count-label').textContent =
+    `${shown} of ${physicalControls.length} controls`
+}
+
+function populateDatalist(dl, controls) {
+  dl.innerHTML = controls.map(c => `<option value="${esc(c.name)}">`).join('')
+}
+
+// ── Event delegation ──────────────────────────────────────────────────────────
+
+document.getElementById('tbody').addEventListener('change', async e => {
+  const el = e.target
+  const id = el.dataset.id
+  if (!id) return
+
+  if (el.classList.contains('comp-sel')) {
+    const componentName = el.value
+    const pc = physicalControls.find(p => p.id === id)
+    const a = assignments.get(id) ?? {}
+
+    if (!componentName) {
+      assignments.delete(id)
+      refreshRow(id)
+      return
+    }
+
+    assignments.set(id, { ...a, component: componentName, controlName: '', min: -100, max: 10 })
+
+    // Fetch controls and populate datalist
+    const ctrls = await getControlsFor(componentName)
+    const row = document.querySelector(`tr[data-id="${id}"]`)
+    if (row) {
+      const dl = row.querySelector('datalist')
+      if (dl) populateDatalist(dl, ctrls)
+      const ctrlInp = row.querySelector('.ctrl-input')
+      if (ctrlInp) { ctrlInp.value = ''; ctrlInp.disabled = false; ctrlInp.placeholder = 'type or pick…' }
+      const minInp = row.querySelector('.min-inp')
+      const maxInp = row.querySelector('.max-inp')
+      if (minInp && pc?.controlType !== 'toggle') minInp.disabled = false
+      if (maxInp && pc?.controlType !== 'toggle') maxInp.disabled = false
+      const clearBtn = row.querySelector('.clear-btn')
+      if (clearBtn) clearBtn.disabled = false
+      row.className = 'ctrl-row assigned'
+    }
+  }
+})
+
+document.getElementById('tbody').addEventListener('input', e => {
+  const el = e.target
+  const id = el.dataset.id
+  if (!id) return
+
+  const a = assignments.get(id) ?? {}
+
+  if (el.classList.contains('ctrl-input')) {
+    const ctrlName = el.value.trim()
+    assignments.set(id, { ...a, controlName: ctrlName })
+    // Auto-fill min/max based on control name hints
+    if (ctrlName && !a.controlName) {
+      const [min, max] = guessRange(ctrlName)
+      const row = document.querySelector(`tr[data-id="${id}"]`)
+      if (row) {
+        const minInp = row.querySelector('.min-inp')
+        const maxInp = row.querySelector('.max-inp')
+        if (minInp && !minInp.disabled) { minInp.value = min; a.min = min }
+        if (maxInp && !maxInp.disabled) { maxInp.value = max; a.max = max }
+      }
+    }
+  } else if (el.classList.contains('min-inp')) {
+    assignments.set(id, { ...a, min: parseFloat(el.value) || 0 })
+  } else if (el.classList.contains('max-inp')) {
+    assignments.set(id, { ...a, max: parseFloat(el.value) || 1 })
+  }
+})
+
+document.getElementById('tbody').addEventListener('click', e => {
+  const btn = e.target.closest('.clear-btn')
+  if (!btn) return
+  const id = btn.dataset.id
+  assignments.delete(id)
+  refreshRow(id)
+})
+
+function refreshRow(id) {
+  const row = document.querySelector(`tr.ctrl-row[data-id="${id}"]`)
+  if (!row) return
+  const pc = physicalControls.find(p => p.id === id)
+  const isToggle = pc?.controlType === 'toggle'
+
+  row.className = 'ctrl-row'
+  const compSel  = row.querySelector('.comp-sel');  if (compSel) compSel.value = ''
+  const ctrlInp  = row.querySelector('.ctrl-input'); if (ctrlInp) { ctrlInp.value = ''; ctrlInp.disabled = true; ctrlInp.placeholder = '—' }
+  const minInp   = row.querySelector('.min-inp');   if (minInp) { minInp.disabled = true; if (!isToggle) minInp.value = '-100' }
+  const maxInp   = row.querySelector('.max-inp');   if (maxInp) { maxInp.disabled = true; if (!isToggle) maxInp.value = '10'   }
+  const clearBtn = row.querySelector('.clear-btn'); if (clearBtn) clearBtn.disabled = true
+  const dl = row.querySelector('datalist');         if (dl) dl.innerHTML = ''
+}
+
+// ── Tabs & filter ─────────────────────────────────────────────────────────────
+
+document.getElementById('tabs').addEventListener('click', e => {
+  const tab = e.target.closest('.tab')
+  if (!tab) return
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'))
+  tab.classList.add('active')
+  activeGroup = tab.dataset.group
+  renderTable()
+})
+
+document.getElementById('filter-input').addEventListener('input', e => {
+  filterText = e.target.value
+  renderTable()
+})
+
+// ── Refresh ───────────────────────────────────────────────────────────────────
+
+document.getElementById('refresh-btn').addEventListener('click', async () => {
+  setOverlay('Refreshing Q-Sys components…')
+  await refreshQsys()
+  hideOverlay()
+  renderTable()
+})
+
+// ── Save ──────────────────────────────────────────────────────────────────────
+
+function buildMappings() {
+  const mappings = []
+  for (const pc of physicalControls) {
+    const a = assignments.get(pc.id)
+    if (!a?.component || !a?.controlName) continue
+    const isToggle = pc.controlType === 'toggle'
+    mappings.push({
+      label: a.label || pc.label,
+      midi: { ...pc.midi },
+      qsys: isToggle
+        ? { type: 'toggle', component: a.component, control: a.controlName }
+        : { type: 'component_control', component: a.component, control: a.controlName, min: a.min ?? -100, max: a.max ?? 10 },
+    })
+  }
+  return mappings
+}
+
+async function doSave() {
+  const status = document.getElementById('save-status')
+  status.className = ''
+  status.textContent = 'Saving…'
+  try {
+    const mappings = buildMappings()
+    await ipcRenderer.invoke('cfg:save-config', mappings)
+    status.className = 'ok'
+    status.textContent = `✓ Saved — ${mappings.length} mappings`
+    setTimeout(() => { status.textContent = ''; status.className = '' }, 4000)
+    return true
+  } catch (e) {
+    status.className = 'err'
+    status.textContent = '✗ ' + e.message
+    return false
+  }
+}
+
+document.getElementById('save-btn').addEventListener('click', doSave)
+
+document.getElementById('save-restart-btn').addEventListener('click', async () => {
+  const mappings = buildMappings()
+  const status = document.getElementById('save-status')
+  status.className = ''
+  status.textContent = 'Applying…'
+  try {
+    await ipcRenderer.invoke('cfg:save-and-apply', mappings)
+    status.className = 'ok'
+    status.textContent = '✓ Applied — bridge updated live'
+  } catch (e) {
+    status.className = 'err'
+    status.textContent = 'Error: ' + e.message
+  }
+})
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function guessRange(ctrlName) {
+  const n = ctrlName.toLowerCase()
+  if (n.includes('gain') || n.includes('level') || n.includes('volume')) return [-100, 10]
+  if (n.includes('freq') || n.includes('hz'))  return [20, 20000]
+  if (n.includes('threshold'))                  return [-40, 0]
+  if (n.includes('ratio'))                      return [1, 20]
+  if (n.includes('attack') || n.includes('release')) return [0, 500]
+  if (n.includes('pan'))                        return [-100, 100]
+  if (n.includes('delay') || n.includes('ms'))  return [0, 2000]
+  return [0, 1]
+}
+
+function esc(str) {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+}
+
+function setOverlay(msg) {
+  document.getElementById('overlay').style.display = 'flex'
+  document.getElementById('overlay-msg').textContent = msg
+}
+
+function hideOverlay() {
+  document.getElementById('overlay').style.display = 'none'
+}
+
+// ── Go ────────────────────────────────────────────────────────────────────────
+
+init().catch(e => {
+  hideOverlay()
+  document.getElementById('save-status').className = 'err'
+  document.getElementById('save-status').textContent = 'Init error: ' + e.message
+  console.error(e)
+})
+</script>
+</body>
+</html>
