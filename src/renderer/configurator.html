@@ -182,6 +182,43 @@
     .ctrl-input-wrap { position: relative; }
     .ctrl-input-wrap input[type=text] { padding-right: 20px; }
 
+    /* ── Network panel ── */
+    #network-panel {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    #network-panel summary {
+      padding: 8px 14px;
+      font-size: 12px; font-weight: 600;
+      cursor: pointer;
+      color: var(--text);
+      list-style: none;
+    }
+    #network-panel summary::-webkit-details-marker { display: none; }
+    #network-panel summary::before { content: '▸  '; color: var(--text-dim); }
+    #network-panel[open] summary::before { content: '▾  '; }
+    .network-body {
+      padding: 2px 14px 12px 30px;
+      display: flex; flex-direction: column; gap: 8px;
+    }
+    .net-row {
+      display: flex; align-items: center; gap: 8px;
+    }
+    .net-label {
+      width: 80px; font-size: 11px; color: var(--text-dim); flex-shrink: 0;
+    }
+    .net-row code {
+      font-size: 12px; background: var(--bg); padding: 3px 7px; border-radius: 4px;
+      flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      min-width: 0;
+    }
+    .net-hint { font-size: 11px; color: var(--text-dim); min-height: 14px; }
+    .switch-label {
+      display: flex; align-items: center; gap: 6px;
+      font-size: 12px; cursor: pointer;
+    }
+
     /* ── Footer ── */
     footer {
       display: flex; align-items: center; gap: 10px;
@@ -225,6 +262,30 @@
   </div>
   <button class="btn btn-ghost" id="refresh-btn">↺ Refresh Q-Sys</button>
 </header>
+
+<details id="network-panel">
+  <summary>Network — UCI Web Server</summary>
+  <div class="network-body">
+    <div class="net-row">
+      <span class="net-label">Local URL</span>
+      <code id="net-local-url">—</code>
+      <button class="btn btn-ghost" id="net-local-copy">Copy</button>
+    </div>
+    <div class="net-row">
+      <span class="net-label">LAN URL</span>
+      <code id="net-lan-url">—</code>
+      <button class="btn btn-ghost" id="net-lan-copy" disabled>Copy</button>
+    </div>
+    <div class="net-row">
+      <span class="net-label">UCI Server</span>
+      <label class="switch-label">
+        <input type="checkbox" id="uci-enabled-toggle">
+        Enabled
+      </label>
+    </div>
+    <div class="net-hint" id="net-hint"></div>
+  </div>
+</details>
 
 <div class="tabs" id="tabs">
   <button class="tab active" data-group="all">All <span class="tab-ct" data-group="all"></span></button>
@@ -278,7 +339,7 @@
 
 <script>
 /* global require */
-const { ipcRenderer } = require('electron')
+const { ipcRenderer, clipboard } = require('electron')
 
 // ── State ────────────────────────────────────────────────────────────────────
 
@@ -648,6 +709,51 @@ document.getElementById('save-restart-btn').addEventListener('click', async () =
   }
 })
 
+// ── Network panel ─────────────────────────────────────────────────────────────
+
+async function initNetwork() {
+  const localCode = document.getElementById('net-local-url')
+  const lanCode    = document.getElementById('net-lan-url')
+  const lanCopyBtn = document.getElementById('net-lan-copy')
+  const toggle     = document.getElementById('uci-enabled-toggle')
+
+  try {
+    const info = await ipcRenderer.invoke('cfg:get-network-info')
+    localCode.textContent = info.localUrl
+    if (info.lanUrl) {
+      lanCode.textContent = info.lanUrl
+      lanCopyBtn.disabled = false
+    } else {
+      lanCode.textContent = 'No network detected — connect to Wi-Fi'
+      lanCopyBtn.disabled = true
+    }
+    toggle.checked = info.uciEnabled
+  } catch (e) {
+    localCode.textContent = 'Error: ' + e.message
+    lanCode.textContent = 'Error: ' + e.message
+    lanCopyBtn.disabled = true
+  }
+}
+
+document.getElementById('net-local-copy').addEventListener('click', () => {
+  clipboard.writeText(document.getElementById('net-local-url').textContent)
+})
+
+document.getElementById('net-lan-copy').addEventListener('click', () => {
+  clipboard.writeText(document.getElementById('net-lan-url').textContent)
+})
+
+document.getElementById('uci-enabled-toggle').addEventListener('change', async e => {
+  const hint = document.getElementById('net-hint')
+  try {
+    await ipcRenderer.invoke('cfg:set-uci-enabled', e.target.checked)
+    hint.textContent = 'Restart required to apply changes to the UCI server'
+  } catch (err) {
+    hint.textContent = 'Error: ' + err.message
+    e.target.checked = !e.target.checked
+  }
+})
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function guessRange(ctrlName) {
@@ -687,6 +793,8 @@ init().catch(e => {
   document.getElementById('save-status').textContent = 'Init error: ' + e.message
   console.error(e)
 })
+
+initNetwork().catch(e => console.error('Network panel init error:', e))
 </script>
 </body>
 </html>
