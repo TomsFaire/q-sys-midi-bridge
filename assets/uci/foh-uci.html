@@ -1,0 +1,3437 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>FOH Mixer</title>
+<!--
+  Q-SYS FOH Mixer UCI
+  Core: 10.4.84.20  |  TCP QRC port 1710
+
+  Connection path (Option B — Node.js proxy):
+    Browser  ──WS──▶  Node.js :3001/qrc  ──TCP──▶  Core :1710
+  Option A (future — Lua on Core):
+    Browser  ──WS──▶  Lua HTTP/WS server  ──native──▶  Core controls
+  Only the ws:// URL changes between options. All frontend code is identical.
+
+  Tabs: INPUTS (built) · BUSES · OUTPUTS · ROUTING · PATCH (stubs)
+
+  Input.Mixer slots:
+    1–8   = Mic.01–Mic.08 (mono)
+    9     = Stby  (stereo)
+    10    = Sptfy (stereo)
+    11    = ZoomRX (stereo)
+    12    = Slides (stereo)
+
+  Meter channels (Meter component, meter2):
+    1–8   = Mics post-EQ
+    9–10  = Stby L/R
+    11–12 = Sptfy L/R
+    13–14 = ZoomRX L/R
+    15–16 = Slides L/R
+    17    = MicRoom bus
+    18    = MicZoom bus
+    19–20 = MusicRoom L/R
+    21–22 = MusicZoom L/R
+    23–24 = SlidesRoom L/R
+    25–26 = SlidesZoom L/R
+    27–28 = ZoomRtn L/R
+    29–30 = Mains L/R
+    31–32 = ZoomTX L/R
+    33–34 = Rec L/R
+-->
+<script>
+// QRCClient — WebSocket wrapper that mirrors the qrc.js API surface.
+// Connects to the /qrc relay endpoint (Node.js Option B, or Lua Option A).
+// Only window.location.host changes between deployment options.
+const QRC = (() => {
+  let ws = null;
+  let nextId = 1;
+  const pending = new Map();   // numeric id → {resolve, reject}
+  const cgCbs   = new Map();   // changeGroup id string → callback
+  const handlers = {};
+  let reconnectTimer = null;
+  let connectUrl = null;
+
+  function emit(event, data) { handlers[event]?.(data); }
+
+  function rpc(method, params) {
+    return new Promise((resolve, reject) => {
+      const id = nextId++;
+      pending.set(id, { resolve, reject });
+      ws.send(JSON.stringify({ jsonrpc: '2.0', id, method, params }));
+    });
+  }
+
+  function doConnect(url) {
+    connectUrl = url;
+    ws = new WebSocket(url);
+
+    ws.onopen = () => {
+      clearTimeout(reconnectTimer);
+      console.log('[QRC] connected');
+    };
+
+    ws.onclose = () => {
+      emit('close');
+      // Reconnect after 2s
+      reconnectTimer = setTimeout(() => doConnect(connectUrl), 2000);
+    };
+
+    ws.onerror = () => emit('error');
+
+    ws.onmessage = ({ data }) => {
+      let msg;
+      try { msg = JSON.parse(data); } catch { return; }
+
+      // Core push notification: no id / null id, has method field
+      if ((msg.id === undefined || msg.id === null) && msg.method) {
+        emit(msg.method, msg.params);
+        return;
+      }
+
+      // ChangeGroup AutoPoll push: id is a string (group name)
+      if (typeof msg.id === 'string') {
+        cgCbs.get(msg.id)?.(msg.result?.Changes ?? []);
+        return;
+      }
+
+      // RPC response: numeric id
+      if (typeof msg.id === 'number') {
+        const p = pending.get(msg.id);
+        if (!p) return;
+        pending.delete(msg.id);
+        msg.error ? p.reject(new Error(msg.error.message)) : p.resolve(msg.result);
+      }
+    };
+  }
+
+  return {
+    connect: (url) => doConnect(url),
+    on: (event, cb) => { handlers[event] = cb; },
+    component: {
+      set(name, controls) {
+        // Fire-and-forget
+        rpc('Component.Set', { Name: name, Controls: controls }).catch(() => {});
+      },
+      get(name, controlNames, cb) {
+        rpc('Component.Get', { Name: name, Controls: controlNames })
+          .then(r => cb(r?.Controls ?? []))
+          .catch(() => cb([]));
+      },
+    },
+    changeGroup: {
+      create: (id) => rpc('ChangeGroup.Add', { Id: id }).catch(() => {}),
+      addComponentControl: (id, comp) =>
+        rpc('ChangeGroup.AddComponentControl', { Id: id, Component: comp }).catch(() => {}),
+      poll(id, rateMs, cb) {
+        cgCbs.set(id, cb);
+        rpc('ChangeGroup.AutoPoll', { Id: id, Rate: rateMs / 1000 }).catch(() => {});
+      },
+      stop: (id) => rpc('ChangeGroup.AutoPoll', { Id: id, Rate: 0 }).catch(() => {}),
+    },
+  };
+})();
+</script>
+<style>
+  /* ── Faire design tokens ──────────────────────────────────────── */
+  :root {
+    --bg:          #f5f5f5;
+    --card:        #ffffff;
+    --border:      #dfe0e1;
+    --text:        #333333;
+    --subdued:     #757575;
+    --radius:      4px;
+    --fader-track: #dfe0e1;
+    --fader-fill:  #333333;
+    --mute-bg:     #f2e5e1;
+    --mute-border: #d17e70;
+    --mute-text:   #921100;
+    --sends-bg:    #f6efdb;
+    --sends-border:#d1b985;
+    --sends-text:  #7a5c1e;
+    --vu-low:      #49694c;
+    --vu-mid:      #907c3a;
+    --vu-clip:     #921100;
+    --vu-off:      #e8e8e8;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: 'Inter', -apple-system, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 13px;
+    height: 100dvh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    -webkit-tap-highlight-color: transparent;
+    user-select: none;
+  }
+
+  /* ── Tab bar ──────────────────────────────────────────────────── */
+  #tab-bar {
+    display: flex;
+    align-items: center;
+    height: 44px;
+    border-bottom: 1px solid var(--border);
+    background: var(--card);
+    padding: 0 16px;
+    gap: 4px;
+    flex-shrink: 0;
+  }
+  .tab-btn {
+    padding: 6px 14px;
+    border: none;
+    background: transparent;
+    color: var(--subdued);
+    font-size: 12px;
+    font-weight: 500;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    cursor: pointer;
+    border-radius: var(--radius);
+  }
+  .tab-btn.active {
+    color: var(--text);
+    background: var(--bg);
+  }
+  .tab-btn.stub { opacity: 0.4; cursor: default; }
+
+  /* ── Page containers ──────────────────────────────────────────── */
+  .page { display: none; flex: 1; flex-direction: column; overflow: hidden; }
+  .page.active { display: flex; }
+
+  /* ── Bank + sends bars ────────────────────────────────────────── */
+  #inputs-controls {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 16px;
+    border-bottom: 1px solid var(--border);
+    background: var(--card);
+    flex-shrink: 0;
+    flex-wrap: wrap;
+  }
+  .bank-group {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .bank-label {
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--subdued);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-right: 2px;
+  }
+  .bank-btn {
+    padding: 4px 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: transparent;
+    color: var(--subdued);
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+  }
+  .bank-btn.active {
+    background: var(--text);
+    border-color: var(--text);
+    color: white;
+  }
+
+  #sends-bar {
+    display: none;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 16px;
+    background: var(--sends-bg);
+    border-bottom: 1px solid var(--sends-border);
+    flex-shrink: 0;
+    flex-wrap: wrap;
+  }
+  #sends-bar.visible { display: flex; }
+  .sends-label {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--sends-text);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-right: 2px;
+  }
+  .sends-bus-btn {
+    padding: 3px 10px;
+    border: 1px solid var(--sends-border);
+    border-radius: var(--radius);
+    background: transparent;
+    color: var(--sends-text);
+    font-size: 11px;
+    font-weight: 500;
+    cursor: pointer;
+  }
+  .sends-bus-btn.active {
+    background: var(--sends-text);
+    color: white;
+    border-color: var(--sends-text);
+  }
+  #sends-exit {
+    margin-left: auto;
+    padding: 3px 10px;
+    border: 1px solid var(--sends-border);
+    border-radius: var(--radius);
+    background: transparent;
+    color: var(--sends-text);
+    font-size: 11px;
+    font-weight: 500;
+    cursor: pointer;
+  }
+
+  /* ── Channel strip grid ───────────────────────────────────────── */
+  #strips-container {
+    flex: 1;
+    display: flex;
+    align-items: stretch;
+    padding: 12px 16px;
+    gap: 8px;
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+
+  .strip {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 10px 8px 8px;
+    min-width: 80px;
+    flex: 1;
+    max-width: 120px;
+    gap: 6px;
+    transition: background 0.15s, border-color 0.15s;
+  }
+  .strip.muted {
+    background: var(--mute-bg);
+    border-color: var(--mute-border);
+  }
+  .strip.stereo { border-style: dashed; }
+
+  /* label */
+  .strip-label {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text);
+    text-align: center;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    width: 100%;
+    max-width: 90px;
+    cursor: text;
+    padding: 2px 4px;
+    border-radius: 2px;
+  }
+  .strip-label:focus {
+    outline: none;
+    background: var(--bg);
+  }
+  .strip.muted .strip-label { color: var(--mute-text); }
+
+  /* mute button */
+  .mute-btn {
+    width: 100%;
+    padding: 5px 0;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: transparent;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    color: var(--subdued);
+    cursor: pointer;
+    text-transform: uppercase;
+  }
+  .strip.muted .mute-btn {
+    background: var(--mute-bg);
+    border-color: var(--mute-border);
+    color: var(--mute-text);
+  }
+
+  /* fader + VU area */
+  .fader-vu-row {
+    flex: 1;
+    display: flex;
+    align-items: stretch;
+    gap: 5px;
+    width: 100%;
+    min-height: 120px;
+  }
+
+  /* vertical fader */
+  .fader-wrap {
+    flex: 1;
+    position: relative;
+    display: flex;
+    justify-content: center;
+    cursor: pointer;
+  }
+  .fader-track {
+    position: absolute;
+    top: 0; bottom: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 3px;
+    background: var(--fader-track);
+    border-radius: 2px;
+  }
+  .fader-handle {
+    position: absolute;
+    left: 50%;
+    transform: translate(-50%, 50%);
+    width: 28px;
+    height: 14px;
+    background: var(--fader-fill);
+    border-radius: 2px;
+    cursor: grab;
+    touch-action: none;
+  }
+  .fader-handle:active { cursor: grabbing; }
+  .strip.muted .fader-handle { background: #c0a09a; }
+
+  /* dB zero line */
+  .fader-zero {
+    position: absolute;
+    left: 4px; right: 4px;
+    height: 1px;
+    background: var(--border);
+  }
+
+  /* VU meter (mono) */
+  .vu-meter {
+    width: 10px;
+    display: flex;
+    flex-direction: column-reverse;
+    gap: 1px;
+    align-self: stretch;
+  }
+  .vu-seg {
+    flex: 1;
+    border-radius: 1px;
+    background: var(--vu-off);
+    max-height: 6px;
+  }
+
+  /* dB readout */
+  .db-readout {
+    font-size: 10px;
+    color: var(--subdued);
+    font-variant-numeric: tabular-nums;
+    text-align: center;
+  }
+  .strip.muted .db-readout { color: var(--mute-text); }
+
+  /* sends mode overlay on fader track */
+  .strip.sends-mode .fader-track { background: #d1b985; }
+  .strip.sends-mode .fader-handle { background: #7a5c1e; }
+
+  /* ── Status bar ───────────────────────────────────────────────── */
+  #status-bar {
+    height: 24px;
+    display: flex;
+    align-items: center;
+    padding: 0 16px;
+    background: var(--card);
+    border-top: 1px solid var(--border);
+    flex-shrink: 0;
+    gap: 8px;
+  }
+  #conn-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: #d17e70;
+    flex-shrink: 0;
+  }
+  #conn-dot.ok { background: var(--vu-low); }
+  #conn-dot.connecting { background: var(--sends-border); animation: pulse 1s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+  #conn-label { font-size: 10px; color: var(--subdued); }
+
+  /* ── Stub pages ───────────────────────────────────────────────── */
+  .stub-page {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--subdued);
+    font-size: 13px;
+  }
+
+  /* ── Buses tab ────────────────────────────────────────────────── */
+  #buses-controls {
+    display: flex;
+    align-items: center;
+    padding: 8px 16px;
+    border-bottom: 1px solid var(--border);
+    background: var(--card);
+    flex-shrink: 0;
+  }
+  #buses-controls .bank-group { display: flex; align-items: center; gap: 6px; width: 100%; }
+  #buses-controls .bank-label {
+    font-size: 11px; font-weight: 500; color: var(--subdued);
+    text-transform: uppercase; letter-spacing: 0.05em; margin-right: 2px;
+  }
+  .buses-sends-btn {
+    padding: 4px 12px; border: 1px solid var(--border); border-radius: 4px;
+    background: transparent; color: var(--subdued); font-size: 12px;
+    font-weight: 500; cursor: pointer;
+  }
+  .buses-sends-btn.active { background: var(--text); border-color: var(--text); color: white; }
+  #buses-sends-exit {
+    padding: 4px 12px; border: 1px solid var(--border); border-radius: 4px;
+    background: transparent; color: var(--subdued); font-size: 12px; cursor: pointer;
+  }
+  #buses-strips-container {
+    flex: 1; display: flex; align-items: stretch;
+    padding: 12px 16px; gap: 8px; overflow-x: auto; overflow-y: hidden;
+  }
+
+  /* ── Outputs tab ──────────────────────────────────────────────── */
+  #page-outputs { padding: 12px 16px; gap: 8px; overflow-x: auto; overflow-y: hidden; }
+  #outputs-strips { display: flex; align-items: stretch; gap: 12px; height: 100%; }
+  #page-outputs .strip { min-width: 140px; max-width: 180px; flex: 0 0 160px; }
+  .delay-row {
+    display: flex; align-items: center; gap: 6px; width: 100%;
+    margin-top: 4px; border-top: 1px solid var(--border); padding-top: 8px;
+  }
+  .delay-label {
+    font-size: 10px; font-weight: 600; color: var(--subdued);
+    text-transform: uppercase; letter-spacing: 0.05em; width: 40px;
+  }
+  .delay-value {
+    font-size: 11px; font-weight: 600; color: var(--text);
+    font-variant-numeric: tabular-nums; flex: 1; text-align: center;
+    padding: 4px 6px; background: var(--bg); border-radius: 4px; min-width: 50px;
+  }
+  .delay-btn {
+    width: 24px; height: 24px; padding: 0; border: 1px solid var(--border);
+    border-radius: 4px; background: transparent; color: var(--subdued);
+    font-size: 14px; font-weight: 700; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+  }
+
+  /* ── Patch tab ────────────────────────────────────────────────── */
+  #page-patch { overflow-y: auto; }
+  #patch-scroll { display: flex; flex-direction: column; gap: 24px; padding: 16px; max-width: 800px; }
+  .patch-section { display: flex; flex-direction: column; gap: 12px; }
+  .patch-section-title {
+    font-size: 12px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: 0.05em; color: var(--text); margin: 0;
+  }
+  .phantom-grid { display: grid; grid-template-columns: repeat(8, 1fr); gap: 8px; }
+  .phantom-btn {
+    padding: 8px 4px; border: 1px solid var(--border); border-radius: 20px;
+    background: white; color: var(--subdued); font-size: 11px; font-weight: 600;
+    letter-spacing: 0.03em; cursor: pointer;
+  }
+  .phantom-btn.on { background: #4a7c59; border-color: #4a7c59; color: white; }
+  .router-table {
+    width: 100%; border-collapse: collapse; background: var(--card);
+    border: 1px solid var(--border); border-radius: 4px; overflow: hidden;
+  }
+  .router-table thead { background: var(--bg); border-bottom: 1px solid var(--border); }
+  .router-table th {
+    padding: 10px 12px; text-align: left; font-size: 11px; font-weight: 600;
+    color: var(--subdued); text-transform: uppercase; letter-spacing: 0.05em;
+  }
+  .router-col-label { width: 35%; }
+  .router-col-select { width: 65%; }
+  .router-table tbody tr { border-bottom: 1px solid var(--border); }
+  .router-table tbody tr:last-child { border-bottom: none; }
+  .router-table td { padding: 10px 12px; font-size: 13px; }
+  .router-label { color: var(--text); font-weight: 500; }
+  .router-ch-label { font: 700 11px/1 var(--font); color: var(--text-dim); letter-spacing: 0.05em; }
+  .router-select {
+    padding: 6px 8px; border: 1px solid var(--border); border-radius: 4px;
+    background: white; color: var(--text); font-size: 13px;
+    font-family: 'Inter', -apple-system, sans-serif; cursor: pointer; min-width: 120px;
+  }
+  .router-select:focus { outline: none; border-color: var(--text); }
+
+  /* ── ROUTING tab ─────────────────────────────────────────────────────── */
+  #page-routing { padding: 16px; overflow: auto; }
+  #routing-sections { display: flex; flex-direction: row; gap: 32px; align-items: flex-start; flex-wrap: nowrap; }
+  .routing-section { margin-bottom: 28px; }
+  .routing-section-title {
+    font: 600 11px/1 var(--font); letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--text-dim); margin: 0 0 10px;
+  }
+  .routing-table-wrap { overflow-x: auto; }
+  .routing-table { border-collapse: collapse; }
+  .routing-table th, .routing-table td { padding: 0; }
+  .routing-table .rt-corner { width: 120px; min-width: 120px; }
+  .routing-table .rt-col-hdr {
+    width: 44px; min-width: 44px; vertical-align: bottom;
+    padding: 0 0 6px 0; text-align: center;
+  }
+  .rt-col-hdr-inner {
+    writing-mode: vertical-rl;
+    transform: rotate(180deg);
+    white-space: nowrap;
+    font: 600 11px/1 var(--font); color: var(--text-dim);
+    letter-spacing: 0.04em;
+    display: inline-block;
+  }
+  .routing-table .rt-row-hdr {
+    font: 500 12px/1 var(--font); color: var(--text); text-align: right;
+    padding: 0 10px 0 0; white-space: nowrap; height: 40px;
+  }
+  .xp-cell {
+    width: 44px; height: 40px; text-align: center; vertical-align: middle;
+    cursor: pointer; user-select: none; border: 1px solid var(--border);
+    font: 500 11px/1 var(--font); transition: background 0.1s;
+  }
+  .xp-cell.xp-off  { background: var(--bg); color: var(--text-dim); }
+  .xp-cell.xp-on   { background: #49694c; color: #fff; }
+  .xp-cell.xp-trim { background: #8aad8d; color: #1a3a1d; }
+  .xp-cell:active  { filter: brightness(0.88); }
+
+  /* crosspoint level popover */
+  .xp-overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.35); z-index: 200;
+  }
+  .xp-popover {
+    position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+    z-index: 201; background: #fff; border: 1px solid var(--border); border-radius: 6px;
+    padding: 20px; width: 280px; box-shadow: 0 4px 24px rgba(0,0,0,0.18);
+  }
+  .xp-pop-title {
+    font: 600 13px/1.3 var(--font); color: var(--text); margin-bottom: 18px;
+  }
+  .xp-pop-toggle {
+    width: 100%; padding: 10px; border-radius: 4px; border: 1px solid;
+    font: 600 13px/1 var(--font); cursor: pointer; margin-bottom: 14px;
+    transition: background 0.1s;
+  }
+  .xp-pop-toggle.on {
+    background: #49694c; border-color: #49694c; color: #fff;
+  }
+  .xp-pop-toggle.off {
+    background: var(--bg); border-color: var(--border); color: var(--text-dim);
+  }
+  .xp-pop-slider-wrap { margin-bottom: 6px; }
+  .xp-pop-slider {
+    width: 100%; accent-color: #49694c; cursor: pointer;
+  }
+  .xp-pop-db {
+    text-align: center; font: 500 13px/1 var(--font); color: var(--text);
+    margin-bottom: 18px; margin-top: 4px;
+  }
+  .xp-pop-footer { display: flex; justify-content: flex-end; }
+  .xp-pop-close {
+    padding: 8px 20px; background: var(--text); color: #fff; border: none;
+    border-radius: 4px; font: 600 12px/1 var(--font); cursor: pointer;
+  }
+
+  /* ── PROCESSING SHEET ────────────────────────────────────────────────── */
+  #processing-overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.45); z-index: 300;
+    display: none;
+  }
+  #processing-overlay.active { display: block; }
+
+  #processing-sheet {
+    position: fixed; bottom: 0; left: 0; right: 0;
+    height: 72vh; z-index: 301;
+    background: #fff; border-top: 1px solid var(--border);
+    border-radius: 12px 12px 0 0;
+    display: none; flex-direction: column;
+  }
+  #processing-sheet.active { display: flex; }
+
+  .proc-sheet-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 14px 16px 0; flex-shrink: 0;
+  }
+  #proc-channel-name {
+    font: 700 15px/1 var(--font); color: var(--text);
+  }
+  #proc-close-btn {
+    padding: 6px 14px; background: var(--bg); border: 1px solid var(--border);
+    border-radius: 4px; font: 600 12px/1 var(--font); color: var(--text);
+    cursor: pointer;
+  }
+  .proc-tab-bar {
+    display: flex; gap: 4px; padding: 10px 16px 0; flex-shrink: 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .proc-tab-btn {
+    padding: 7px 16px; border: none; background: none; border-radius: 4px 4px 0 0;
+    font: 600 12px/1 var(--font); color: var(--text-dim); cursor: pointer;
+    border-bottom: 2px solid transparent; margin-bottom: -1px;
+  }
+  .proc-tab-btn.active { color: var(--text); border-bottom-color: var(--text); }
+  .proc-tab-btn.proc-tab-hidden { display: none; }
+
+  .proc-content-area {
+    overflow-y: auto; padding: 16px; flex: 1 1 0;
+  }
+  .proc-tab-content { display: none; }
+  .proc-tab-content.active { display: block; }
+
+  /* Filters */
+  .proc-filter-column { margin-bottom: 16px; }
+  .proc-filter-label {
+    font: 700 11px/1 var(--font); text-transform: uppercase; letter-spacing: 0.07em;
+    color: var(--text-dim); margin-bottom: 8px;
+  }
+  .proc-bypass-btn {
+    padding: 5px 12px; border: 1px solid var(--border); border-radius: 4px;
+    background: var(--bg); font: 600 11px/1 var(--font); color: var(--text-dim);
+    cursor: pointer; margin-bottom: 8px;
+  }
+  .proc-bypass-btn.active { background: #49694c; border-color: #49694c; color: #fff; }
+  .proc-slider-row { display: flex; align-items: center; gap: 10px; }
+  .proc-slider { flex: 1; accent-color: #49694c; cursor: pointer; }
+  .proc-val { font: 500 12px/1 var(--font); color: var(--text); min-width: 72px; text-align: right; }
+
+  /* EQ */
+  .proc-eq-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+
+  /* EQ merged layout */
+  .proc-eq-below-row {
+    display: flex;
+    gap: 16px;
+    align-items: flex-start;
+  }
+  .proc-eq-filters-col {
+    flex: 0 0 180px;
+    min-width: 140px;
+  }
+  .proc-eq-bands-col {
+    flex: 1;
+    min-width: 0;
+  }
+  .proc-eq-band { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 10px; }
+  .proc-eq-band-label { font: 700 10px/1 var(--font); text-transform: uppercase; color: var(--text-dim); margin-bottom: 8px; }
+  .proc-eq-band label { font: 500 11px/1 var(--font); color: var(--text-dim); display: block; margin: 8px 0 3px; }
+  .proc-eq-band input[type=range] { width: 100%; accent-color: #49694c; cursor: pointer; }
+  .proc-eq-band .proc-val { min-width: 0; text-align: left; font-size: 11px; }
+
+  /* Compressor */
+  .proc-comp-section { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .proc-comp-row label { font: 500 11px/1 var(--font); color: var(--text-dim); display: block; margin-bottom: 4px; }
+
+  /* Strip EQ button */
+  .strip-label-row { display: flex; align-items: center; gap: 4px; padding: 0 10px; }
+  .strip-eq-btn {
+    flex-shrink: 0; width: 22px; height: 22px; border: none; border-radius: 3px;
+    background: transparent; color: var(--text-dim); font-size: 15px; line-height: 1;
+    cursor: pointer; display: flex; align-items: center; justify-content: center;
+    padding: 0;
+  }
+  .strip-eq-btn:hover { background: var(--border); }
+  .strip-eq-btn:active { background: var(--text-dim); color: #fff; }
+  /* Make strip-label fill remaining space when in a row */
+  .strip-label-row .strip-label { flex: 1; min-width: 0; padding: 0; }
+
+  /* ── Meters drawer ───────────────────────────────────────────────── */
+  @media (orientation: portrait) {
+    #meters-drawer { display: none !important; }
+  }
+
+  .meters-drawer {
+    position: fixed;
+    bottom: 0; left: 0; right: 0;
+    z-index: 150;
+    background: var(--card);
+    border-top: 1px solid var(--border);
+    transition: height 250ms ease;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+  .meters-drawer.collapsed   { height: 28px; }
+  .meters-drawer.half-open   { height: 38vh; }
+  .meters-drawer.full-screen { height: 100vh; }
+
+  .meters-handle {
+    height: 28px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    cursor: pointer;
+    font: 600 10px/1 var(--font);
+    color: var(--subdued);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    border-bottom: 1px solid var(--border);
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  .meters-content {
+    flex: 1 1 0;
+    display: flex;
+    align-items: flex-end;
+    padding: 6px 12px 8px;
+    gap: 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+
+  .meters-group-wrap {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    flex-shrink: 0;
+  }
+  .meters-group-wrap + .meters-group-wrap {
+    padding-left: 10px;
+    margin-left: 10px;
+    border-left: 1px solid var(--border);
+  }
+
+  .meters-group-title {
+    font: 600 8px/1 var(--font);
+    color: var(--subdued);
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    margin-bottom: 4px;
+    flex-shrink: 0;
+  }
+
+  .meters-group {
+    display: flex;
+    align-items: flex-end;
+    gap: 2px;
+    flex: 1 1 0;
+    min-height: 0;
+  }
+
+  .meter-col {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    flex-shrink: 0;
+  }
+
+  .meter-col-label {
+    font: 600 7px/1 var(--font);
+    color: var(--subdued);
+    text-align: center;
+    white-space: nowrap;
+  }
+
+  .meter-col-bars {
+    display: flex;
+    gap: 1px;
+    align-items: flex-end;
+    flex: 1 1 0;
+    min-height: 0;
+  }
+
+  .meter-col-vu {
+    width: 5px;
+    display: flex;
+    flex-direction: column-reverse;
+    gap: 1px;
+    flex: 1 1 0;
+    min-height: 0;
+  }
+
+  /* Override .vu-seg max-height for drawer (strip uses max-height:6px) */
+  .meter-col-vu .vu-seg {
+    max-height: none;
+    flex: 1 1 0;
+    min-height: 0;
+  }
+
+  .meter-mute-dot {
+    width: 5px; height: 5px;
+    border-radius: 50%;
+    background: transparent;
+    flex-shrink: 0;
+  }
+  .meter-mute-dot.muted { background: var(--mute-text); }
+</style>
+</head>
+<body>
+
+<!-- Tab bar -->
+<div id="tab-bar">
+  <button class="tab-btn active" data-tab="inputs">Inputs</button>
+  <button class="tab-btn"        data-tab="buses">Buses</button>
+  <button class="tab-btn"        data-tab="outputs">Outputs</button>
+  <button class="tab-btn"        data-tab="routing">Routing</button>
+  <button class="tab-btn"        data-tab="patch">Patch</button>
+</div>
+
+<!-- INPUTS page -->
+<div id="page-inputs" class="page active">
+
+  <!-- Bank + sends controls -->
+  <div id="inputs-controls">
+    <div class="bank-group">
+      <button id="bank-all-btn" class="bank-btn active">Bank</button>
+      <button class="bank-btn" data-bank="mics">Mics 1–8</button>
+      <button class="bank-btn" data-bank="stereo">Stereo Sources</button>
+    </div>
+  </div>
+
+  <!-- Sends mode bar (hidden until activated) -->
+  <div id="sends-bar">
+    <span class="sends-label">Sends to</span>
+    <!-- populated by JS from bus labels -->
+    <button id="sends-exit">Exit sends mode</button>
+  </div>
+
+  <!-- Channel strips -->
+  <div id="strips-container"></div>
+
+</div>
+
+<!-- BUSES page -->
+<div id="page-buses" class="page">
+  <div id="buses-controls">
+    <div class="bank-group">
+      <span class="bank-label">Sends to</span>
+      <button class="buses-sends-btn" data-out-slot="1">Mains</button>
+      <button class="buses-sends-btn" data-out-slot="3">Zoom TX</button>
+      <button class="buses-sends-btn" data-out-slot="5">Rec</button>
+      <button id="buses-sends-exit" style="margin-left:auto">Exit sends mode</button>
+    </div>
+  </div>
+  <div id="buses-strips-container"></div>
+</div>
+
+<!-- OUTPUTS page -->
+<div id="page-outputs" class="page">
+  <div id="outputs-strips"></div>
+</div>
+
+<!-- ROUTING page -->
+<div id="page-routing" class="page">
+  <div id="routing-sections">
+    <div class="routing-section">
+      <div class="routing-section-title">Input → Bus</div>
+      <div class="routing-table-wrap">
+        <table id="input-bus-table" class="routing-table"></table>
+      </div>
+    </div>
+    <div class="routing-section">
+      <div class="routing-section-title">Bus → Output</div>
+      <div class="routing-table-wrap">
+        <table id="bus-output-table" class="routing-table"></table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Processing sheet (slide-up panel) -->
+<div id="processing-overlay"></div>
+<div id="processing-sheet">
+  <div class="proc-sheet-header">
+    <span id="proc-channel-name">Channel</span>
+    <button id="proc-close-btn">Done</button>
+  </div>
+  <div class="proc-tab-bar">
+    <button id="proc-tab-eq"   class="proc-tab-btn active">EQ</button>
+    <button id="proc-tab-comp" class="proc-tab-btn">Comp</button>
+    <button id="proc-tab-afc"  class="proc-tab-btn">AFC</button>
+    <button id="proc-tab-gate" class="proc-tab-btn">Gate</button>
+  </div>
+  <div class="proc-content-area">
+
+    <!-- EQ tab (merged: SVG curve + HPF/LPF + band sliders) -->
+    <div id="proc-content-eq" class="proc-tab-content active">
+      <!-- SVG curve placeholder — populated in Task 2 -->
+      <div id="eq-curve-container" style="position:relative;margin-bottom:12px;"></div>
+      <!-- Below-curve row: HPF/LPF left | bands right -->
+      <div class="proc-eq-below-row">
+        <div class="proc-eq-filters-col">
+          <div class="proc-filter-label" style="margin-bottom:8px">HPF / LPF</div>
+          <div class="proc-filter-column">
+            <div style="font:500 10px/1 var(--font);color:var(--subdued);text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px">High-Pass</div>
+            <button id="proc-hpf-bypass" class="proc-bypass-btn">OFF</button>
+            <div class="proc-slider-row">
+              <input id="proc-hpf-freq" class="proc-slider" type="range" min="20" max="2000" step="1" value="80">
+              <span id="proc-hpf-freq-val" class="proc-val">80 Hz</span>
+            </div>
+          </div>
+          <div class="proc-filter-column">
+            <div style="font:500 10px/1 var(--font);color:var(--subdued);text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px">Low-Pass</div>
+            <button id="proc-lpf-bypass" class="proc-bypass-btn">OFF</button>
+            <div class="proc-slider-row">
+              <input id="proc-lpf-freq" class="proc-slider" type="range" min="2000" max="20000" step="100" value="20000">
+              <span id="proc-lpf-freq-val" class="proc-val">20 kHz</span>
+            </div>
+          </div>
+        </div>
+        <div class="proc-eq-grid proc-eq-bands-col">
+        <!-- Band 1 -->
+        <div class="proc-eq-band" id="proc-eq-band-col-1">
+          <div class="proc-eq-band-label">Band 1</div>
+          <button id="proc-eq-bypass-1" class="proc-bypass-btn">OFF</button>
+          <label>Freq</label>
+          <input id="proc-eq-freq-1" type="range" min="20" max="20000" step="1" value="100">
+          <div id="proc-eq-freq-val-1" class="proc-val">100 Hz</div>
+          <label>Gain</label>
+          <input id="proc-eq-gain-1" type="range" min="-12" max="12" step="0.1" value="0">
+          <div id="proc-eq-gain-val-1" class="proc-val">0.0 dB</div>
+          <label>BW</label>
+          <input id="proc-eq-bw-1" type="range" min="0.1" max="3" step="0.01" value="1">
+          <div id="proc-eq-bw-val-1" class="proc-val">1.00 oct</div>
+        </div>
+        <!-- Band 2 -->
+        <div class="proc-eq-band" id="proc-eq-band-col-2">
+          <div class="proc-eq-band-label">Band 2</div>
+          <button id="proc-eq-bypass-2" class="proc-bypass-btn">OFF</button>
+          <label>Freq</label>
+          <input id="proc-eq-freq-2" type="range" min="20" max="20000" step="1" value="500">
+          <div id="proc-eq-freq-val-2" class="proc-val">500 Hz</div>
+          <label>Gain</label>
+          <input id="proc-eq-gain-2" type="range" min="-12" max="12" step="0.1" value="0">
+          <div id="proc-eq-gain-val-2" class="proc-val">0.0 dB</div>
+          <label>BW</label>
+          <input id="proc-eq-bw-2" type="range" min="0.1" max="3" step="0.01" value="1">
+          <div id="proc-eq-bw-val-2" class="proc-val">1.00 oct</div>
+        </div>
+        <!-- Band 3 -->
+        <div class="proc-eq-band" id="proc-eq-band-col-3">
+          <div class="proc-eq-band-label">Band 3</div>
+          <button id="proc-eq-bypass-3" class="proc-bypass-btn">OFF</button>
+          <label>Freq</label>
+          <input id="proc-eq-freq-3" type="range" min="20" max="20000" step="1" value="2000">
+          <div id="proc-eq-freq-val-3" class="proc-val">2 kHz</div>
+          <label>Gain</label>
+          <input id="proc-eq-gain-3" type="range" min="-12" max="12" step="0.1" value="0">
+          <div id="proc-eq-gain-val-3" class="proc-val">0.0 dB</div>
+          <label>BW</label>
+          <input id="proc-eq-bw-3" type="range" min="0.1" max="3" step="0.01" value="1">
+          <div id="proc-eq-bw-val-3" class="proc-val">1.00 oct</div>
+        </div>
+        <!-- Band 4 -->
+        <div class="proc-eq-band" id="proc-eq-band-col-4">
+          <div class="proc-eq-band-label">Band 4</div>
+          <button id="proc-eq-bypass-4" class="proc-bypass-btn">OFF</button>
+          <label>Freq</label>
+          <input id="proc-eq-freq-4" type="range" min="20" max="20000" step="1" value="8000">
+          <div id="proc-eq-freq-val-4" class="proc-val">8 kHz</div>
+          <label>Gain</label>
+          <input id="proc-eq-gain-4" type="range" min="-12" max="12" step="0.1" value="0">
+          <div id="proc-eq-gain-val-4" class="proc-val">0.0 dB</div>
+          <label>BW</label>
+          <input id="proc-eq-bw-4" type="range" min="0.1" max="3" step="0.01" value="1">
+          <div id="proc-eq-bw-val-4" class="proc-val">1.00 oct</div>
+        </div>
+        </div><!-- /proc-eq-bands-col -->
+      </div><!-- /proc-eq-below-row -->
+    </div><!-- /proc-content-eq -->
+
+    <!-- COMP tab -->
+    <div id="proc-content-comp" class="proc-tab-content">
+      <button id="proc-comp-bypass" class="proc-bypass-btn" style="margin-bottom:14px">OFF</button>
+      <div class="proc-comp-section">
+        <div class="proc-comp-row">
+          <label>Threshold</label>
+          <div class="proc-slider-row">
+            <input id="proc-comp-threshold" class="proc-slider" type="range" min="-40" max="0" step="0.5" value="-18">
+            <span id="proc-comp-threshold-val" class="proc-val">-18.0 dB</span>
+          </div>
+        </div>
+        <div class="proc-comp-row">
+          <label>Ratio</label>
+          <div class="proc-slider-row">
+            <input id="proc-comp-ratio" class="proc-slider" type="range" min="1" max="20" step="0.1" value="4">
+            <span id="proc-comp-ratio-val" class="proc-val">4.0:1</span>
+          </div>
+        </div>
+        <div class="proc-comp-row">
+          <label>Attack</label>
+          <div class="proc-slider-row">
+            <input id="proc-comp-attack" class="proc-slider" type="range" min="0.1" max="200" step="0.1" value="10">
+            <span id="proc-comp-attack-val" class="proc-val">10.0 ms</span>
+          </div>
+        </div>
+        <div class="proc-comp-row">
+          <label>Release</label>
+          <div class="proc-slider-row">
+            <input id="proc-comp-release" class="proc-slider" type="range" min="10" max="2000" step="1" value="100">
+            <span id="proc-comp-release-val" class="proc-val">100.0 ms</span>
+          </div>
+        </div>
+        <div class="proc-comp-row">
+          <label>Makeup Gain</label>
+          <div class="proc-slider-row">
+            <input id="proc-comp-makeup" class="proc-slider" type="range" min="-12" max="20" step="0.1" value="0">
+            <span id="proc-comp-makeup-val" class="proc-val">+0.0 dB</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- AFC tab -->
+    <div id="proc-content-afc" class="proc-tab-content">
+      <div class="proc-filter-label">Notch Feedback Controller</div>
+      <!-- Action buttons row -->
+      <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap">
+        <button id="proc-afc-bypass" class="proc-bypass-btn" style="margin-bottom:0">OFF</button>
+        <button id="proc-afc-mute"   class="proc-bypass-btn" style="margin-bottom:0">Mute</button>
+        <button id="proc-afc-clear-all"     class="proc-bypass-btn" style="margin-bottom:0;background:var(--bg)">Clear All</button>
+        <button id="proc-afc-clear-dynamic" class="proc-bypass-btn" style="margin-bottom:0;background:var(--bg)">Clear Dynamic</button>
+      </div>
+      <div class="proc-comp-section">
+        <div class="proc-comp-row">
+          <label>Gain</label>
+          <div class="proc-slider-row">
+            <input id="proc-afc-gain" class="proc-slider" type="range" min="-100" max="20" step="0.1" value="0">
+            <span id="proc-afc-gain-val" class="proc-val">0.0 dB</span>
+          </div>
+        </div>
+        <div class="proc-comp-row">
+          <label>Feedback Threshold</label>
+          <div class="proc-slider-row">
+            <input id="proc-afc-threshold" class="proc-slider" type="range" min="-80" max="0" step="0.5" value="-40">
+            <span id="proc-afc-threshold-val" class="proc-val">-40.0 dB</span>
+          </div>
+        </div>
+        <div class="proc-comp-row">
+          <label>Notch Bandwidth</label>
+          <div class="proc-slider-row">
+            <input id="proc-afc-bandwidth" class="proc-slider" type="range" min="0" max="3" step="1" value="2">
+            <span id="proc-afc-bandwidth-val" class="proc-val">1/20</span>
+          </div>
+        </div>
+        <div class="proc-comp-row">
+          <label>Min Dynamic Freq</label>
+          <div class="proc-slider-row">
+            <input id="proc-afc-minfreq" class="proc-slider" type="range" min="20" max="20000" step="1" value="1000">
+            <span id="proc-afc-minfreq-val" class="proc-val">1.0 kHz</span>
+          </div>
+        </div>
+        <div class="proc-comp-row">
+          <label>Max Dynamic Freq</label>
+          <div class="proc-slider-row">
+            <input id="proc-afc-maxfreq" class="proc-slider" type="range" min="20" max="20000" step="1" value="1000">
+            <span id="proc-afc-maxfreq-val" class="proc-val">1.0 kHz</span>
+          </div>
+        </div>
+        <div class="proc-comp-row">
+          <label>Reclaim Time</label>
+          <div class="proc-slider-row">
+            <input id="proc-afc-reclaim" class="proc-slider" type="range" min="1" max="120" step="0.5" value="30">
+            <span id="proc-afc-reclaim-val" class="proc-val">30.0 s</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Gate tab -->
+    <div id="proc-content-gate" class="proc-tab-content">
+      <button id="proc-gate-bypass" class="proc-bypass-btn" style="margin-bottom:14px">OFF</button>
+      <div class="proc-comp-section">
+        <div class="proc-comp-row">
+          <label>Threshold</label>
+          <div class="proc-slider-row">
+            <input id="proc-gate-threshold" class="proc-slider" type="range" min="-80" max="0" step="0.5" value="-40">
+            <span id="proc-gate-threshold-val" class="proc-val">-40.0 dB</span>
+          </div>
+        </div>
+        <div class="proc-comp-row">
+          <label>Attack</label>
+          <div class="proc-slider-row">
+            <input id="proc-gate-attack" class="proc-slider" type="range" min="0.1" max="200" step="0.1" value="5">
+            <span id="proc-gate-attack-val" class="proc-val">5.0 ms</span>
+          </div>
+        </div>
+        <div class="proc-comp-row">
+          <label>Hold</label>
+          <div class="proc-slider-row">
+            <input id="proc-gate-hold" class="proc-slider" type="range" min="0" max="2000" step="1" value="100">
+            <span id="proc-gate-hold-val" class="proc-val">100.0 ms</span>
+          </div>
+        </div>
+        <div class="proc-comp-row">
+          <label>Release</label>
+          <div class="proc-slider-row">
+            <input id="proc-gate-release" class="proc-slider" type="range" min="10" max="4000" step="1" value="300">
+            <span id="proc-gate-release-val" class="proc-val">300.0 ms</span>
+          </div>
+        </div>
+        <div class="proc-comp-row">
+          <label>Range</label>
+          <div class="proc-slider-row">
+            <input id="proc-gate-range" class="proc-slider" type="range" min="-80" max="0" step="0.5" value="-80">
+            <span id="proc-gate-range-val" class="proc-val">-80.0 dB</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /proc-content-area -->
+</div><!-- /processing-sheet -->
+
+<!-- Meters drawer (fixed, landscape only, z-index below processing sheet) -->
+<div id="meters-drawer" class="meters-drawer collapsed">
+  <div id="meters-handle" class="meters-handle">
+    <span>Meters</span>
+    <span id="meters-arrow">↑</span>
+  </div>
+  <div id="meters-content" class="meters-content"></div>
+</div>
+
+<!-- Crosspoint level popover (shared) -->
+<div id="xp-overlay" class="xp-overlay" hidden></div>
+<div id="xp-popover" class="xp-popover" hidden>
+  <div id="xp-pop-title" class="xp-pop-title"></div>
+  <button id="xp-pop-toggle" class="xp-pop-toggle off">OFF</button>
+  <div id="xp-pop-slider-wrap" class="xp-pop-slider-wrap">
+    <input id="xp-pop-slider" type="range" min="-60" max="10" step="0.5" value="0" class="xp-pop-slider">
+  </div>
+  <div id="xp-pop-db" class="xp-pop-db">−∞</div>
+  <div class="xp-pop-footer">
+    <button id="xp-pop-close" class="xp-pop-close">Done</button>
+  </div>
+</div>
+
+<!-- PATCH page -->
+<div id="page-patch" class="page">
+  <div id="patch-scroll">
+    <div class="patch-section">
+      <h3 class="patch-section-title">Phantom Power — Analog Inputs 1–8</h3>
+      <div class="phantom-grid" id="phantom-grid"></div>
+    </div>
+    <div class="patch-section">
+      <h3 class="patch-section-title">Input Router</h3>
+      <table class="router-table">
+        <thead><tr><th class="router-col-label">Output</th><th class="router-col-select">Source</th></tr></thead>
+        <tbody id="router-tbody"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- Status bar -->
+<div id="status-bar">
+  <div id="conn-dot" class="connecting"></div>
+  <span id="conn-label">Connecting…</span>
+</div>
+
+<script>
+// ── Channel definitions ────────────────────────────────────────────────────────
+//
+// mixerSlot: Input.Mixer input number (1-indexed)
+// meterCh: Meter component channel(s) — array for stereo (L meter used for display)
+// labelPin: Labels component control name
+// isStereo: true for stereo sources (slightly different VU display)
+
+// ── Graphical EQ SVG ─────────────────────────────────────────────────────────
+const EQ_SVG_W = 800;
+const EQ_SVG_H = 180;
+const EQ_DB_MIN = -18;
+const EQ_DB_MAX = 18;
+const EQ_FREQ_MIN = 20;
+const EQ_FREQ_MAX = 20000;
+const EQ_N_POINTS = 200;
+const EQ_FS = 48000;
+const EQ_PAD = { top: 16, right: 10, bottom: 22, left: 32 };
+const BAND_COLORS = ['#5b7a9a', '#8a6a3a', '#7a5b8a', '#4a8a6a'];
+
+function eqFreqToX(f) {
+  const logMin = Math.log10(EQ_FREQ_MIN), logMax = Math.log10(EQ_FREQ_MAX);
+  return EQ_PAD.left + (Math.log10(Math.max(f, EQ_FREQ_MIN)) - logMin) / (logMax - logMin) * (EQ_SVG_W - EQ_PAD.left - EQ_PAD.right);
+}
+
+function eqDbToY(db) {
+  return EQ_PAD.top + (EQ_DB_MAX - Math.max(EQ_DB_MIN, Math.min(EQ_DB_MAX, db))) / (EQ_DB_MAX - EQ_DB_MIN) * (EQ_SVG_H - EQ_PAD.top - EQ_PAD.bottom);
+}
+
+function eqXToFreq(x) {
+  const logMin = Math.log10(EQ_FREQ_MIN), logMax = Math.log10(EQ_FREQ_MAX);
+  const t = (x - EQ_PAD.left) / (EQ_SVG_W - EQ_PAD.left - EQ_PAD.right);
+  return Math.pow(10, logMin + Math.max(0, Math.min(1, t)) * (logMax - logMin));
+}
+
+function eqYToDb(y) {
+  const t = (y - EQ_PAD.top) / (EQ_SVG_H - EQ_PAD.top - EQ_PAD.bottom);
+  return EQ_DB_MAX - Math.max(0, Math.min(1, t)) * (EQ_DB_MAX - EQ_DB_MIN);
+}
+
+// 2nd-order analog Butterworth HPF magnitude in dB
+function eqHpfDb(f, fc, bypassed) {
+  if (bypassed || fc <= 0) return 0;
+  return -10 * Math.log10(1 + Math.pow(fc / f, 4));
+}
+
+// 2nd-order analog Butterworth LPF magnitude in dB
+function eqLpfDb(f, fc, bypassed) {
+  if (bypassed || fc >= EQ_FREQ_MAX * 2) return 0;
+  return -10 * Math.log10(1 + Math.pow(f / fc, 4));
+}
+
+// RBJ peaking EQ biquad magnitude in dB, evaluated at frequency f
+function eqPeakingDb(f, f0, gainDb, bwOct, bypassed) {
+  if (bypassed || Math.abs(gainDb) < 0.01) return 0;
+  const A = Math.pow(10, gainDb / 40);
+  const w0 = 2 * Math.PI * f0 / EQ_FS;
+  const Q = 1 / (2 * Math.sinh(Math.LN2 / 2 * bwOct));
+  const alpha = Math.sin(w0) / (2 * Q);
+  const a0 = 1 + alpha / A;
+  const nb0 = (1 + alpha * A) / a0;
+  const nb1 = (-2 * Math.cos(w0)) / a0;
+  const nb2 = (1 - alpha * A) / a0;
+  const na1 = (-2 * Math.cos(w0)) / a0;
+  const na2 = (1 - alpha / A) / a0;
+  const w = 2 * Math.PI * f / EQ_FS;
+  const cw = Math.cos(w), sw = Math.sin(w), c2w = Math.cos(2 * w), s2w = Math.sin(2 * w);
+  const nR = nb0 + nb1 * cw + nb2 * c2w, nI = -(nb1 * sw + nb2 * s2w);
+  const dR = 1 + na1 * cw + na2 * c2w,  dI = -(na1 * sw + na2 * s2w);
+  const magSq = (nR * nR + nI * nI) / (dR * dR + dI * dI);
+  return 10 * Math.log10(Math.max(magSq, 1e-12));
+}
+
+(function buildEQSVG() {
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  svg.id = 'eq-curve-svg';
+  svg.setAttribute('viewBox', `0 0 ${EQ_SVG_W} ${EQ_SVG_H}`);
+  svg.setAttribute('preserveAspectRatio', 'none');
+  svg.style.cssText = 'display:block;width:100%;height:180px;border:1px solid var(--border);border-radius:4px;background:var(--bg);touch-action:none';
+
+  // Grid
+  const grid = document.createElementNS(ns, 'g');
+  grid.id = 'eq-grid';
+
+  // Horizontal dB lines
+  [-12,-6,0,6,12].forEach(db => {
+    const y = eqDbToY(db);
+    const line = document.createElementNS(ns, 'line');
+    line.setAttribute('x1', EQ_PAD.left); line.setAttribute('x2', EQ_SVG_W - EQ_PAD.right);
+    line.setAttribute('y1', y); line.setAttribute('y2', y);
+    line.setAttribute('stroke', db === 0 ? '#bbb' : '#e0e0e0');
+    line.setAttribute('stroke-width', db === 0 ? '1.5' : '1');
+    grid.appendChild(line);
+    const label = document.createElementNS(ns, 'text');
+    label.setAttribute('x', EQ_PAD.left - 4); label.setAttribute('y', y + 3);
+    label.setAttribute('text-anchor', 'end');
+    label.setAttribute('font-size', '9'); label.setAttribute('fill', '#999');
+    label.setAttribute('font-family', 'Inter, sans-serif');
+    label.textContent = (db > 0 ? '+' : '') + db;
+    grid.appendChild(label);
+  });
+
+  // Vertical frequency lines
+  [100, 1000, 10000].forEach(f => {
+    const x = eqFreqToX(f);
+    const line = document.createElementNS(ns, 'line');
+    line.setAttribute('x1', x); line.setAttribute('x2', x);
+    line.setAttribute('y1', EQ_PAD.top); line.setAttribute('y2', EQ_SVG_H - EQ_PAD.bottom);
+    line.setAttribute('stroke', '#e0e0e0'); line.setAttribute('stroke-width', '1');
+    grid.appendChild(line);
+    const label = document.createElementNS(ns, 'text');
+    label.setAttribute('x', x); label.setAttribute('y', EQ_SVG_H - EQ_PAD.bottom + 12);
+    label.setAttribute('text-anchor', 'middle');
+    label.setAttribute('font-size', '9'); label.setAttribute('fill', '#999');
+    label.setAttribute('font-family', 'Inter, sans-serif');
+    label.textContent = f >= 1000 ? (f/1000) + 'k' : f;
+    grid.appendChild(label);
+  });
+  svg.appendChild(grid);
+
+  // Response fill (drawn below stroke)
+  const fill = document.createElementNS(ns, 'path');
+  fill.id = 'eq-response-fill';
+  fill.setAttribute('fill', 'rgba(73,105,76,0.10)');
+  fill.setAttribute('stroke', 'none');
+  svg.appendChild(fill);
+
+  // Response stroke
+  const path = document.createElementNS(ns, 'path');
+  path.id = 'eq-response-path';
+  path.setAttribute('fill', 'none');
+  path.setAttribute('stroke', '#49694c');
+  path.setAttribute('stroke-width', '2');
+  path.setAttribute('stroke-linejoin', 'round');
+  svg.appendChild(path);
+
+  document.getElementById('eq-curve-container').appendChild(svg);
+
+  // Create HTML overlay handles (avoids SVG aspect-ratio distortion)
+  BAND_COLORS.forEach(function(color, i) {
+    var h = document.createElement('div');
+    h.id = 'eq-handle-' + (i + 1);
+    h.style.cssText = 'position:absolute;width:20px;height:20px;border-radius:50%;border:2px solid #fff;transform:translate(-50%,-50%);cursor:pointer;touch-action:none;box-sizing:border-box;';
+    h.style.background = color;
+    document.getElementById('eq-curve-container').style.position = 'relative';
+    document.getElementById('eq-curve-container').appendChild(h);
+  });
+})();
+
+const BANKS = {
+  mics: [
+    { id:'mic1',   mixerSlot:1,  meterCh:[1],     labelPin:'Mic.01', defaultLabel:'Mic 1',    isStereo:false },
+    { id:'mic2',   mixerSlot:2,  meterCh:[2],     labelPin:'Mic.02', defaultLabel:'Mic 2',    isStereo:false },
+    { id:'mic3',   mixerSlot:3,  meterCh:[3],     labelPin:'Mic.03', defaultLabel:'Mic 3',    isStereo:false },
+    { id:'mic4',   mixerSlot:4,  meterCh:[4],     labelPin:'Mic.04', defaultLabel:'Mic 4',    isStereo:false },
+    { id:'mic5',   mixerSlot:5,  meterCh:[5],     labelPin:'Mic.05', defaultLabel:'Mic 5',    isStereo:false },
+    { id:'mic6',   mixerSlot:6,  meterCh:[6],     labelPin:'Mic.06', defaultLabel:'Mic 6',    isStereo:false },
+    { id:'mic7',   mixerSlot:7,  meterCh:[7],     labelPin:'Mic.07', defaultLabel:'Mic 7',    isStereo:false },
+    { id:'mic8',   mixerSlot:8,  meterCh:[8],     labelPin:'Mic.08', defaultLabel:'Mic 8',    isStereo:false },
+  ],
+  stereo: [
+    { id:'stby',   mixerSlot:9,  meterCh:[9,10],  labelPin:'Stby',   defaultLabel:'STYB', isStereo:true  },
+    { id:'sptfy',  mixerSlot:10, meterCh:[11,12], labelPin:'Sptfy',  defaultLabel:'Spotify',  isStereo:true  },
+    { id:'zoomrx', mixerSlot:11, meterCh:[13,14], labelPin:'ZoomRX', defaultLabel:'Zoom RX',  isStereo:true  },
+    { id:'slides', mixerSlot:12, meterCh:[15,16], labelPin:'Slides', defaultLabel:'Slides',   isStereo:true  },
+  ],
+};
+BANKS.all = [...BANKS.mics, ...BANKS.stereo];
+
+// Bus.Mixer inputs (for sends mode crosspoints on Input.Mixer)
+// Input.Mixer output n → Bus.Mixer input n
+// Confirmed from HANDOFF Phase 3: B1=MicRoom, B2=MicZoom, B3/4=MusicRoom,
+//   B5/6=MusicZoom, B7/8=SlidesRoom, B9/10=SlidesZoom, B11/12=ZoomRtn
+// For sends mode, use the first (L) output index for each bus
+const BUSES = [
+  { outputSlot:1, labelPin:'MicRoom',   defaultLabel:'Mic Room'  },
+  { outputSlot:2, labelPin:'MicZoom',   defaultLabel:'Mic Zoom'  },
+  { outputSlot:3, labelPin:'MusicRoom', defaultLabel:'Music Room' },
+  { outputSlot:5, labelPin:'MusicZoom', defaultLabel:'Music Zoom' },
+  { outputSlot:7, labelPin:'SlidesRoom',defaultLabel:'Slides Rm' },
+  { outputSlot:9, labelPin:'SlidesZoom',defaultLabel:'Slides Zm' },
+  { outputSlot:11,labelPin:'ZoomRtn',   defaultLabel:'Zoom Rtn'  },
+];
+
+// ── State ──────────────────────────────────────────────────────────────────────
+let currentBank = 'all';
+let sendsMode   = false;
+let sendsBusIdx = null; // index into BUSES array
+
+// Per-channel state
+const chState = {};
+[...BANKS.mics, ...BANKS.stereo].forEach(ch => {
+  chState[ch.id] = { gain: 0, mute: false, sendsGain: {} };
+  BUSES.forEach((_, bi) => { chState[ch.id].sendsGain[bi] = -100; });
+});
+
+// Bus labels (loaded from Labels component)
+const busLabels = BUSES.map(b => b.defaultLabel);
+const inputLabels = {};
+[...BANKS.mics, ...BANKS.stereo].forEach(ch => {
+  inputLabels[ch.id] = ch.defaultLabel;
+});
+
+// ── fader dB math ──────────────────────────────────────────────────────────────
+// pos 0..1 → dB.  Reference: pos=0.75 → 0 dB, pos=0 → −∞ (−100), pos=1 → +10
+function posToDb(pos) {
+  if (pos < 0.005) return -100;
+  const REF = 0.75;
+  if (pos <= REF) {
+    // map 0..REF → -60..0  (log taper)
+    const t = pos / REF; // 0..1
+    return -60 * (1 - Math.pow(t, 0.5));
+  } else {
+    // map REF..1 → 0..+10 (linear)
+    return 10 * (pos - REF) / (1 - REF);
+  }
+}
+function dbToPos(db) {
+  if (db <= -100) return 0;
+  const REF = 0.75;
+  if (db <= 0) {
+    const t = Math.pow(1 + db / 60, 2);
+    return t * REF;
+  } else {
+    return REF + (1 - REF) * db / 10;
+  }
+}
+function formatDb(db) {
+  if (db <= -100) return '−∞';
+  if (Math.abs(db) < 0.05) return '0.0 dB';
+  return (db > 0 ? '+' : '') + db.toFixed(1) + ' dB';
+}
+
+// ── VU dB → segment index (20 segments, −60 to +10 dB) ───────────────────────
+const VU_SEGS   = 20;
+const VU_MIN_DB = -60;
+const VU_MAX_DB = 10;
+const VU_MID_DB = -6;   // amber starts here
+const VU_CLIP_DB = 0;   // red starts here
+function dbToSegments(db) {
+  const clamped = Math.max(VU_MIN_DB, Math.min(VU_MAX_DB, db));
+  return Math.round(((clamped - VU_MIN_DB) / (VU_MAX_DB - VU_MIN_DB)) * VU_SEGS);
+}
+
+// ── Build sends bar ────────────────────────────────────────────────────────────
+function buildSendsBar() {
+  const bar = document.getElementById('sends-bar');
+  // Remove old bus buttons (keep label and exit btn)
+  bar.querySelectorAll('.sends-bus-btn').forEach(b => b.remove());
+  const label = bar.querySelector('.sends-label');
+  BUSES.forEach((bus, i) => {
+    const btn = document.createElement('button');
+    btn.className = 'sends-bus-btn';
+    btn.dataset.busIdx = i;
+    btn.textContent = busLabels[i];
+    btn.addEventListener('click', () => activateSendsBus(i));
+    label.after(btn);
+  });
+}
+
+function activateSendsBus(busIdx) {
+  sendsMode = true;
+  sendsBusIdx = busIdx;
+  document.getElementById('sends-bar').classList.add('visible');
+  document.querySelectorAll('.sends-bus-btn').forEach(b => {
+    b.classList.toggle('active', parseInt(b.dataset.busIdx) === busIdx);
+  });
+  // Update all visible strips
+  updateStripsForMode();
+}
+
+document.getElementById('sends-exit').addEventListener('click', () => {
+  sendsMode = false;
+  sendsBusIdx = null;
+  document.getElementById('sends-bar').classList.remove('visible');
+  document.querySelectorAll('.sends-bus-btn').forEach(b => b.classList.remove('active'));
+  updateStripsForMode();
+});
+
+function updateStripsForMode() {
+  const channels = BANKS[currentBank];
+  channels.forEach(ch => {
+    const strip = document.getElementById('strip-' + ch.id);
+    if (!strip) return;
+    strip.classList.toggle('sends-mode', sendsMode);
+    const gain = sendsMode
+      ? (chState[ch.id].sendsGain[sendsBusIdx] ?? -100)
+      : chState[ch.id].gain;
+    setFaderPos(strip, dbToPos(gain));
+    strip.querySelector('.db-readout').textContent = formatDb(gain);
+  });
+}
+
+// ── Build channel strips ───────────────────────────────────────────────────────
+function buildStrips(bank) {
+  const container = document.getElementById('strips-container');
+  container.innerHTML = '';
+  BANKS[bank].forEach(ch => {
+    const strip = document.createElement('div');
+    strip.className = 'strip' + (ch.isStereo ? ' stereo' : '');
+    strip.id = 'strip-' + ch.id;
+    if (chState[ch.id].mute) strip.classList.add('muted');
+    if (sendsMode) strip.classList.add('sends-mode');
+
+    const labelRow = document.createElement('div');
+    labelRow.className = 'strip-label-row';
+    const labelEl = document.createElement('div');
+    labelEl.className = 'strip-label';
+    labelEl.contentEditable = 'true';
+    labelEl.textContent = inputLabels[ch.id];
+    labelEl.addEventListener('blur', () => {
+      const text = labelEl.textContent.trim() || ch.defaultLabel;
+      labelEl.textContent = text;
+      inputLabels[ch.id] = text;
+      QRC.component.set('Labels', [{Name: ch.labelPin, Value: text}]);
+    });
+    labelEl.addEventListener('keydown', e => {
+      if (e.key === 'Enter') { e.preventDefault(); labelEl.blur(); }
+    });
+    const eqBtn = document.createElement('button');
+    eqBtn.className = 'strip-eq-btn';
+    eqBtn.textContent = '⋮';
+    eqBtn.title = 'Processing';
+    eqBtn.addEventListener('click', e => {
+      e.stopPropagation();
+      openProcessingSheet({
+        name:     inputLabels[ch.id] || ch.defaultLabel,
+        hpfComp:  ch.labelPin + '.HPF',
+        lpfComp:  ch.labelPin + '.LPF',
+        eqComp:   ch.labelPin + '.EQ',
+        compComp: null,
+      });
+    });
+    labelRow.appendChild(labelEl);
+    labelRow.appendChild(eqBtn);
+    strip.appendChild(labelRow);
+
+    const muteBtn = document.createElement('button');
+    muteBtn.className = 'mute-btn';
+    muteBtn.textContent = chState[ch.id].mute ? 'MUTED' : 'MUTE';
+    muteBtn.addEventListener('click', () => toggleMute(ch));
+    strip.appendChild(muteBtn);
+
+    const faderVuRow = document.createElement('div');
+    faderVuRow.className = 'fader-vu-row';
+
+    const faderWrap = document.createElement('div');
+    faderWrap.className = 'fader-wrap';
+
+    const track = document.createElement('div');
+    track.className = 'fader-track';
+    faderWrap.appendChild(track);
+
+    // zero dB line
+    const zeroLine = document.createElement('div');
+    zeroLine.className = 'fader-zero';
+    const zeroPos = dbToPos(0);
+    zeroLine.style.bottom = (zeroPos * 100) + '%';
+    faderWrap.appendChild(zeroLine);
+
+    const handle = document.createElement('div');
+    handle.className = 'fader-handle';
+    const currentGain = sendsMode
+      ? (chState[ch.id].sendsGain[sendsBusIdx] ?? -100)
+      : chState[ch.id].gain;
+    const initPos = dbToPos(currentGain);
+    handle.style.bottom = (initPos * 100) + '%';
+    faderWrap.appendChild(handle);
+
+    wireFader(faderWrap, handle, ch);
+    faderVuRow.appendChild(faderWrap);
+
+    // VU meter
+    const vu = document.createElement('div');
+    vu.className = 'vu-meter';
+    vu.id = 'vu-' + ch.id;
+    for (let s = 0; s < VU_SEGS; s++) {
+      const seg = document.createElement('div');
+      seg.className = 'vu-seg';
+      vu.appendChild(seg);
+    }
+    faderVuRow.appendChild(vu);
+
+    strip.appendChild(faderVuRow);
+
+    const dbEl = document.createElement('div');
+    dbEl.className = 'db-readout';
+    dbEl.textContent = formatDb(currentGain);
+    strip.appendChild(dbEl);
+
+    container.appendChild(strip);
+  });
+}
+
+// ── Fader drag ────────────────────────────────────────────────────────────────
+function wireFader(wrap, handle, ch) {
+  let dragging = false;
+  let startY = 0;
+  let startPos = 0;
+
+  function getPos() {
+    const gain = sendsMode
+      ? (chState[ch.id].sendsGain[sendsBusIdx] ?? -100)
+      : chState[ch.id].gain;
+    return dbToPos(gain);
+  }
+
+  function applyPos(pos) {
+    const clamped = Math.max(0, Math.min(1, pos));
+    handle.style.bottom = (clamped * 100) + '%';
+    const db = posToDb(clamped);
+    const strip = handle.closest('.strip');
+    if (strip) strip.querySelector('.db-readout').textContent = formatDb(db);
+    return { pos: clamped, db };
+  }
+
+  function onDown(e) {
+    e.preventDefault();
+    dragging = true;
+    startY = e.touches ? e.touches[0].clientY : e.clientY;
+    startPos = getPos();
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup',   onUp);
+    document.addEventListener('touchmove', onMove, { passive: false });
+    document.addEventListener('touchend',  onUp);
+  }
+
+  function onMove(e) {
+    if (!dragging) return;
+    e.preventDefault();
+    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+    const rect = wrap.getBoundingClientRect();
+    const dy = startY - clientY;           // upward = positive
+    const dPos = dy / rect.height;
+    applyPos(startPos + dPos);
+  }
+
+  function onUp(e) {
+    if (!dragging) return;
+    dragging = false;
+    document.removeEventListener('mousemove', onMove);
+    document.removeEventListener('mouseup',   onUp);
+    document.removeEventListener('touchmove', onMove);
+    document.removeEventListener('touchend',  onUp);
+
+    const clientY = e.changedTouches ? e.changedTouches[0].clientY : e.clientY;
+    const rect = wrap.getBoundingClientRect();
+    const dy = startY - clientY;
+    const finalPos = Math.max(0, Math.min(1, startPos + dy / rect.height));
+    const { db } = applyPos(finalPos);
+
+    if (sendsMode && sendsBusIdx !== null) {
+      chState[ch.id].sendsGain[sendsBusIdx] = db;
+      const bus = BUSES[sendsBusIdx];
+      QRC.component.set('Input.Mixer', [{
+          Name: `input.${ch.mixerSlot}.output.${bus.outputSlot}.gain`,
+          Value: db
+        }]);
+    } else {
+      chState[ch.id].gain = db;
+      QRC.component.set('Input.Mixer', [{
+        Name: `input.${ch.mixerSlot}.gain`,
+        Value: db
+      }]);
+    }
+  }
+
+  handle.addEventListener('mousedown',  onDown);
+  handle.addEventListener('touchstart', onDown, { passive: false });
+  // Click on track to jump
+  wrap.addEventListener('click', e => {
+    if (e.target === handle) return;
+    const rect = wrap.getBoundingClientRect();
+    const relY = e.clientY - rect.top;
+    const newPos = 1 - relY / rect.height;
+    const { db } = applyPos(newPos);
+    if (sendsMode && sendsBusIdx !== null) {
+      chState[ch.id].sendsGain[sendsBusIdx] = db;
+      const bus = BUSES[sendsBusIdx];
+      QRC.component.set('Input.Mixer', [{
+        Name: `input.${ch.mixerSlot}.output.${bus.outputSlot}.gain`,
+        Value: db
+      }]);
+    } else {
+      chState[ch.id].gain = db;
+      QRC.component.set('Input.Mixer', [{
+        Name: `input.${ch.mixerSlot}.gain`,
+        Value: db
+      }]);
+    }
+  });
+}
+
+function setFaderPos(strip, pos) {
+  const handle = strip.querySelector('.fader-handle');
+  if (handle) handle.style.bottom = (pos * 100) + '%';
+}
+
+// ── Mute ──────────────────────────────────────────────────────────────────────
+function toggleMute(ch) {
+  const muted = !chState[ch.id].mute;
+  chState[ch.id].mute = muted;
+  const strip = document.getElementById('strip-' + ch.id);
+  if (strip) {
+    strip.classList.toggle('muted', muted);
+    strip.querySelector('.mute-btn').textContent = muted ? 'MUTED' : 'MUTE';
+  }
+  QRC.component.set('Input.Mixer', [{
+    Name: `input.${ch.mixerSlot}.mute`,
+    Value: muted ? 1 : 0
+  }]);
+}
+
+// ── VU update ─────────────────────────────────────────────────────────────────
+function updateVU(chId, db) {
+  const el = document.getElementById('vu-' + chId);
+  if (!el) return;
+  const lit = dbToSegments(db);
+  const segs = el.querySelectorAll('.vu-seg');
+  segs.forEach((seg, i) => {
+    if (i < lit) {
+      const db_at = VU_MIN_DB + (i / VU_SEGS) * (VU_MAX_DB - VU_MIN_DB);
+      seg.style.background = db_at >= VU_CLIP_DB
+        ? 'var(--vu-clip)'
+        : db_at >= VU_MID_DB
+          ? 'var(--vu-mid)'
+          : 'var(--vu-low)';
+    } else {
+      seg.style.background = 'var(--vu-off)';
+    }
+  });
+}
+
+// ── Tab switching ──────────────────────────────────────────────────────────────
+document.querySelectorAll('.tab-btn').forEach(btn => {
+  if (btn.classList.contains('stub')) return;
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('page-' + btn.dataset.tab).classList.add('active');
+  });
+});
+
+// ── Bank switching ─────────────────────────────────────────────────────────────
+function switchBank(bank) {
+  currentBank = bank;
+  document.querySelectorAll('#inputs-controls .bank-btn').forEach(b => b.classList.remove('active'));
+  if (bank === 'all') {
+    document.getElementById('bank-all-btn').classList.add('active');
+  } else {
+    document.querySelector(`#inputs-controls .bank-btn[data-bank="${bank}"]`).classList.add('active');
+  }
+  buildStrips(bank);
+}
+
+document.getElementById('bank-all-btn').addEventListener('click', () => switchBank('all'));
+document.querySelectorAll('#inputs-controls .bank-btn[data-bank]').forEach(btn => {
+  btn.addEventListener('click', () => switchBank(btn.dataset.bank));
+});
+
+// ── QRC setup ─────────────────────────────────────────────────────────────────
+function setConnStatus(state, msg) {
+  const dot = document.getElementById('conn-dot');
+  dot.className = state;
+  document.getElementById('conn-label').textContent = msg;
+}
+
+function loadInitialState() {
+  const allChannels = [...BANKS.mics, ...BANKS.stereo];
+
+  // Load fader + mute state for all 12 input slots
+  allChannels.forEach(ch => {
+    QRC.component.get('Input.Mixer',
+      [`input.${ch.mixerSlot}.gain`, `input.${ch.mixerSlot}.mute`],
+      function(controls) {
+        controls.forEach(c => {
+          if (c.Name.endsWith('.gain')) {
+            chState[ch.id].gain = c.Value;
+          } else if (c.Name.endsWith('.mute')) {
+            chState[ch.id].mute = !!c.Value;
+          }
+        });
+        // Refresh visible strip if in current bank
+        const strip = document.getElementById('strip-' + ch.id);
+        if (strip) {
+          strip.classList.toggle('muted', chState[ch.id].mute);
+          strip.querySelector('.mute-btn').textContent = chState[ch.id].mute ? 'MUTED' : 'MUTE';
+          if (!sendsMode) {
+            setFaderPos(strip, dbToPos(chState[ch.id].gain));
+            strip.querySelector('.db-readout').textContent = formatDb(chState[ch.id].gain);
+          }
+        }
+      }
+    );
+  });
+
+  // Load labels
+  const labelNames = allChannels.map(ch => ch.labelPin);
+  QRC.component.get('Labels', labelNames, function(controls) {
+    controls.forEach(c => {
+      const ch = allChannels.find(ch => ch.labelPin === c.Name);
+      if (ch && c.Value) {
+        inputLabels[ch.id] = c.Value;
+        const labelEl = document.querySelector(`#strip-${ch.id} .strip-label`);
+        if (labelEl) labelEl.textContent = c.Value;
+      }
+    });
+  });
+
+  // Load bus labels for sends bar
+  const busLabelNames = BUSES.map(b => b.labelPin);
+  QRC.component.get('Labels', busLabelNames, function(controls) {
+    controls.forEach((c, i) => {
+      if (c.Value) busLabels[i] = c.Value;
+    });
+    buildSendsBar();
+  });
+
+  // Subscribe to VU meter changes
+  QRC.changeGroup.create('vu_inputs');
+  // Mics: meter channels 1–8
+  BANKS.mics.forEach((ch, i) => {
+    QRC.changeGroup.addComponentControl('vu_inputs',
+      {Name: 'Meter', Control: `meter.${ch.meterCh[0]}`});
+  });
+  // Stereo: meter channels 9–16 (use L channel)
+  BANKS.stereo.forEach(ch => {
+    QRC.changeGroup.addComponentControl('vu_inputs',
+      {Name: 'Meter', Control: `meter.${ch.meterCh[0]}`});
+  });
+
+  QRC.changeGroup.poll('vu_inputs', 40, function(changes) {
+    changes.forEach(c => {
+      const meterIdx = parseInt(c.Name.split('.')[1]);
+      // Find which channel this meter belongs to
+      const allCh = [...BANKS.mics, ...BANKS.stereo];
+      const ch = allCh.find(ch => ch.meterCh[0] === meterIdx);
+      if (ch) updateVU(ch.id, c.Value);
+    });
+  });
+
+  // Register vu_all ChangeGroup for drawer meters (don't poll yet — drawer starts collapsed)
+  QRC.changeGroup.create('vu_all');
+  DRAWER_CHANNELS.forEach(function(ch) {
+    ch.meterCh.forEach(function(idx) {
+      QRC.changeGroup.addComponentControl('vu_all', { Name: 'Meter', Control: 'meter.' + idx });
+    });
+  });
+}
+
+// ── Init ───────────────────────────────────────────────────────────────────────
+buildSendsBar();
+buildStrips('all');
+
+// Connect to the QRC relay on the same host:port this page was served from.
+// Option B: ws://[mac]:3001/qrc  (Node.js proxy → Core TCP)
+// Option A: ws://[core]:8080/qrc (Lua WS server → Core native API)
+setConnStatus('connecting', 'Connecting…');
+QRC.connect('ws://' + window.location.host + '/qrc');
+
+QRC.on('EngineStatus', function(status) {
+  if (status.State === 'Active') {
+    setConnStatus('ok', status.DesignName || 'Connected');
+    loadInitialState();
+    loadBusState();
+    loadOutputState();
+    loadPatchState();
+    loadRoutingState();
+  }
+});
+
+QRC.on('close', function() {
+  setConnStatus('connecting', 'Reconnecting…');
+});
+
+QRC.on('error', function() {
+  setConnStatus('connecting', 'Connection error — retrying…');
+});
+</script>
+
+<!-- ── BUSES tab ──────────────────────────────────────────────────────────── -->
+<script>
+const BUS_STRIPS = [
+  { id:'microom',    mixerSlot:1,  meterCh:17, labelPin:'MicRoom',    defaultLabel:'Mic Room',   isStereo:false, hasComp:true,  hasAFC:true,  hasGate:true  },
+  { id:'miczoom',    mixerSlot:2,  meterCh:18, labelPin:'MicZoom',    defaultLabel:'Mic Zoom',   isStereo:false, hasComp:true,  hasAFC:true,  hasGate:true  },
+  { id:'musicroom',  mixerSlot:3,  meterCh:19, labelPin:'MusicRoom',  defaultLabel:'Music Room', isStereo:true,  hasComp:false, hasAFC:false, hasGate:false },
+  { id:'musiczoom',  mixerSlot:5,  meterCh:21, labelPin:'MusicZoom',  defaultLabel:'Music Zoom', isStereo:true,  hasComp:false, hasAFC:false, hasGate:false },
+  { id:'slidesroom', mixerSlot:7,  meterCh:23, labelPin:'SlidesRoom', defaultLabel:'Slides Rm',  isStereo:true,  hasComp:false, hasAFC:false, hasGate:false },
+  { id:'slideszoom', mixerSlot:9,  meterCh:25, labelPin:'SlidesZoom', defaultLabel:'Slides Zm',  isStereo:true,  hasComp:false, hasAFC:false, hasGate:false },
+  { id:'zoomrtn',    mixerSlot:11, meterCh:27, labelPin:'ZoomRtn',    defaultLabel:'Zoom Rtn',   isStereo:true,  hasComp:false, hasAFC:false, hasGate:false },
+];
+
+const BUS_OUTPUTS = [
+  { outSlot:1, label:'Mains' },
+  { outSlot:3, label:'Zoom TX' },
+  { outSlot:5, label:'Rec' },
+];
+
+const busState = {};
+BUS_STRIPS.forEach(b => {
+  busState[b.id] = { gain:0, mute:false, sendsGain:{0:-100, 1:-100, 2:-100} };
+});
+const busChannelLabels = {};
+BUS_STRIPS.forEach(b => { busChannelLabels[b.id] = b.defaultLabel; });
+
+let busSendsMode = false;
+let busSendsBusIdx = null;
+
+function buildBusStrips() {
+  const container = document.getElementById('buses-strips-container');
+  container.innerHTML = '';
+  BUS_STRIPS.forEach(bus => {
+    const strip = document.createElement('div');
+    strip.className = 'strip' + (bus.isStereo ? ' stereo' : '');
+    strip.id = 'busstrip-' + bus.id;
+    if (busState[bus.id].mute) strip.classList.add('muted');
+    if (busSendsMode) strip.classList.add('sends-mode');
+
+    const labelRow = document.createElement('div');
+    labelRow.className = 'strip-label-row';
+    const labelEl = document.createElement('div');
+    labelEl.className = 'strip-label';
+    labelEl.contentEditable = 'true';
+    labelEl.textContent = busChannelLabels[bus.id];
+    labelEl.addEventListener('blur', () => {
+      const text = labelEl.textContent.trim() || bus.defaultLabel;
+      labelEl.textContent = text;
+      busChannelLabels[bus.id] = text;
+      QRC.component.set('Labels', [{Name: bus.labelPin, Value: text}]);
+    });
+    labelEl.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); labelEl.blur(); } });
+    const busEqBtn = document.createElement('button');
+    busEqBtn.className = 'strip-eq-btn';
+    busEqBtn.textContent = '⋮';
+    busEqBtn.title = 'Processing';
+    busEqBtn.addEventListener('click', e => {
+      e.stopPropagation();
+      openProcessingSheet({
+        name:     busChannelLabels[bus.id] || bus.defaultLabel,
+        hpfComp:  bus.labelPin + '.HPF',
+        lpfComp:  bus.labelPin + '.LPF',
+        eqComp:   bus.labelPin + '.EQ',
+        compComp: bus.hasComp ? bus.labelPin + '.Comp' : null,
+        afcComp:  bus.hasAFC  ? bus.labelPin + '.AFC'  : null,
+        gateComp: bus.hasGate ? bus.labelPin + '.Gate' : null,
+      });
+    });
+    labelRow.appendChild(labelEl);
+    labelRow.appendChild(busEqBtn);
+    strip.appendChild(labelRow);
+
+    const muteBtn = document.createElement('button');
+    muteBtn.className = 'mute-btn';
+    muteBtn.textContent = busState[bus.id].mute ? 'MUTED' : 'MUTE';
+    muteBtn.addEventListener('click', () => toggleBusMute(bus));
+    strip.appendChild(muteBtn);
+
+    const faderVuRow = document.createElement('div');
+    faderVuRow.className = 'fader-vu-row';
+
+    const faderWrap = document.createElement('div');
+    faderWrap.className = 'fader-wrap';
+    const track = document.createElement('div');
+    track.className = 'fader-track';
+    faderWrap.appendChild(track);
+    const zeroLine = document.createElement('div');
+    zeroLine.className = 'fader-zero';
+    zeroLine.style.bottom = (dbToPos(0) * 100) + '%';
+    faderWrap.appendChild(zeroLine);
+    const handle = document.createElement('div');
+    handle.className = 'fader-handle';
+    const initGain = busSendsMode ? (busState[bus.id].sendsGain[busSendsBusIdx] ?? -100) : busState[bus.id].gain;
+    handle.style.bottom = (dbToPos(initGain) * 100) + '%';
+    faderWrap.appendChild(handle);
+    wireBusFader(faderWrap, handle, bus);
+    faderVuRow.appendChild(faderWrap);
+
+    const vu = document.createElement('div');
+    vu.className = 'vu-col';
+    vu.id = 'busVU-' + bus.id;
+    for (let s = 0; s < VU_SEGS; s++) {
+      const seg = document.createElement('div');
+      seg.className = 'vu-seg';
+      vu.appendChild(seg);
+    }
+    faderVuRow.appendChild(vu);
+    strip.appendChild(faderVuRow);
+
+    const dbEl = document.createElement('div');
+    dbEl.className = 'db-readout';
+    dbEl.textContent = formatDb(initGain);
+    strip.appendChild(dbEl);
+
+    container.appendChild(strip);
+  });
+}
+
+function wireBusFader(wrap, handle, bus) {
+  let dragging = false, startY = 0, startPos = 0;
+  function getPos() {
+    return dbToPos(busSendsMode ? (busState[bus.id].sendsGain[busSendsBusIdx] ?? -100) : busState[bus.id].gain);
+  }
+  function applyPos(pos) {
+    const p = Math.max(0, Math.min(1, pos));
+    handle.style.bottom = (p * 100) + '%';
+    const db = posToDb(p);
+    const strip = handle.closest('.strip');
+    if (strip) strip.querySelector('.db-readout').textContent = formatDb(db);
+    return { pos: p, db };
+  }
+  function onDown(e) {
+    e.preventDefault(); dragging = true;
+    startY = e.touches ? e.touches[0].clientY : e.clientY;
+    startPos = getPos();
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+    document.addEventListener('touchmove', onMove, { passive: false });
+    document.addEventListener('touchend', onUp);
+  }
+  function onMove(e) {
+    if (!dragging) return; e.preventDefault();
+    const y = e.touches ? e.touches[0].clientY : e.clientY;
+    const rect = wrap.getBoundingClientRect();
+    applyPos(startPos + (startY - y) / rect.height);
+  }
+  function onUp(e) {
+    if (!dragging) return; dragging = false;
+    document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp);
+    document.removeEventListener('touchmove', onMove); document.removeEventListener('touchend', onUp);
+    const y = e.changedTouches ? e.changedTouches[0].clientY : e.clientY;
+    const rect = wrap.getBoundingClientRect();
+    const { db } = applyPos(startPos + (startY - y) / rect.height);
+    commitBusFader(bus, db);
+  }
+  handle.addEventListener('mousedown', onDown);
+  handle.addEventListener('touchstart', onDown, { passive: false });
+  wrap.addEventListener('click', e => {
+    if (e.target === handle) return;
+    const rect = wrap.getBoundingClientRect();
+    const { db } = applyPos(1 - (e.clientY - rect.top) / rect.height);
+    commitBusFader(bus, db);
+  });
+}
+
+function commitBusFader(bus, db) {
+  if (busSendsMode && busSendsBusIdx !== null) {
+    busState[bus.id].sendsGain[busSendsBusIdx] = db;
+    QRC.component.set('Bus.Mixer', [{ Name: `input.${bus.mixerSlot}.output.${BUS_OUTPUTS[busSendsBusIdx].outSlot}.gain`, Value: db }]);
+  } else {
+    busState[bus.id].gain = db;
+    QRC.component.set('Bus.Mixer', [{ Name: `input.${bus.mixerSlot}.gain`, Value: db }]);
+  }
+}
+
+function toggleBusMute(bus) {
+  const muted = !busState[bus.id].mute;
+  busState[bus.id].mute = muted;
+  const strip = document.getElementById('busstrip-' + bus.id);
+  if (strip) {
+    strip.classList.toggle('muted', muted);
+    strip.querySelector('.mute-btn').textContent = muted ? 'MUTED' : 'MUTE';
+  }
+  QRC.component.set('Bus.Mixer', [{ Name: `input.${bus.mixerSlot}.mute`, Value: muted ? 1 : 0 }]);
+}
+
+function updateBusVU(id, db) {
+  const el = document.getElementById('busVU-' + id);
+  if (!el) return;
+  const lit = dbToSegments(db);
+  el.querySelectorAll('.vu-seg').forEach((seg, i) => {
+    if (i < lit) {
+      const d = VU_MIN_DB + (i / VU_SEGS) * (VU_MAX_DB - VU_MIN_DB);
+      seg.style.background = d >= VU_CLIP_DB ? 'var(--vu-clip)' : d >= VU_MID_DB ? 'var(--vu-mid)' : 'var(--vu-low)';
+    } else { seg.style.background = 'var(--vu-off)'; }
+  });
+}
+
+function updateBusStripsForMode() {
+  BUS_STRIPS.forEach(bus => {
+    const strip = document.getElementById('busstrip-' + bus.id);
+    if (!strip) return;
+    strip.classList.toggle('sends-mode', busSendsMode);
+    const gain = busSendsMode ? (busState[bus.id].sendsGain[busSendsBusIdx] ?? -100) : busState[bus.id].gain;
+    setFaderPos(strip, dbToPos(gain));
+    strip.querySelector('.db-readout').textContent = formatDb(gain);
+  });
+}
+
+document.querySelectorAll('.buses-sends-btn').forEach((btn, idx) => {
+  btn.addEventListener('click', () => {
+    busSendsMode = true; busSendsBusIdx = idx;
+    document.querySelectorAll('.buses-sends-btn').forEach(b => b.classList.toggle('active', b === btn));
+    updateBusStripsForMode();
+  });
+});
+
+document.getElementById('buses-sends-exit').addEventListener('click', () => {
+  busSendsMode = false; busSendsBusIdx = null;
+  document.querySelectorAll('.buses-sends-btn').forEach(b => b.classList.remove('active'));
+  updateBusStripsForMode();
+});
+
+function loadBusState() {
+  BUS_STRIPS.forEach(bus => {
+    QRC.component.get('Bus.Mixer', [`input.${bus.mixerSlot}.gain`, `input.${bus.mixerSlot}.mute`], function(controls) {
+      controls.forEach(c => {
+        if (c.Name.endsWith('.gain')) busState[bus.id].gain = c.Value;
+        else if (c.Name.endsWith('.mute')) busState[bus.id].mute = !!c.Value;
+      });
+      const strip = document.getElementById('busstrip-' + bus.id);
+      if (strip) {
+        strip.classList.toggle('muted', busState[bus.id].mute);
+        strip.querySelector('.mute-btn').textContent = busState[bus.id].mute ? 'MUTED' : 'MUTE';
+        if (!busSendsMode) {
+          setFaderPos(strip, dbToPos(busState[bus.id].gain));
+          strip.querySelector('.db-readout').textContent = formatDb(busState[bus.id].gain);
+        }
+      }
+    });
+  });
+
+  QRC.component.get('Labels', BUS_STRIPS.map(b => b.labelPin), function(controls) {
+    controls.forEach(c => {
+      const bus = BUS_STRIPS.find(b => b.labelPin === c.Name);
+      if (bus && c.Value) {
+        busChannelLabels[bus.id] = c.Value;
+        const el = document.querySelector(`#busstrip-${bus.id} .strip-label`);
+        if (el) el.textContent = c.Value;
+      }
+    });
+  });
+
+  QRC.changeGroup.create('vu_buses');
+  BUS_STRIPS.forEach(bus => QRC.changeGroup.addComponentControl('vu_buses', { Name:'Meter', Control:`meter.${bus.meterCh}` }));
+  QRC.changeGroup.poll('vu_buses', 40, function(changes) {
+    changes.forEach(c => {
+      const ch = parseInt(c.Name.split('.')[1]);
+      const bus = BUS_STRIPS.find(b => b.meterCh === ch);
+      if (bus) updateBusVU(bus.id, c.Value);
+    });
+  });
+}
+
+buildBusStrips();
+</script>
+
+<!-- ── OUTPUTS tab ─────────────────────────────────────────────────────────── -->
+<script>
+const OUTPUT_STRIPS = [
+  { id:'mains',  gainComp:'Mains.Gain',  delayComp:'Mains.Delay',  hpfComp:'Mains.HPF',  lpfComp:'Mains.LPF',  eqComp:'Mains.EQ',  meterCh:29, labelPin:'Mains',  defaultLabel:'Mains'   },
+  { id:'zoomtx', gainComp:'ZoomTX.Gain', delayComp:'ZoomTX.Delay', hpfComp:'ZoomTX.HPF', lpfComp:'ZoomTX.LPF', eqComp:'ZoomTX.EQ', meterCh:31, labelPin:'ZoomTX', defaultLabel:'Zoom TX' },
+  { id:'rec',    gainComp:'Rec.Gain',    delayComp:'Rec.Delay',     hpfComp:'Rec.HPF',    lpfComp:'Rec.LPF',    eqComp:'Rec.EQ',    meterCh:33, labelPin:'Rec',    defaultLabel:'Rec'     },
+];
+
+const outState = {};
+const outLabels = {};
+OUTPUT_STRIPS.forEach(s => {
+  outState[s.id] = { gain:0, mute:false, delay:0 };
+  outLabels[s.id] = s.defaultLabel;
+});
+
+function buildOutputStrips() {
+  const container = document.getElementById('outputs-strips');
+  container.innerHTML = '';
+  OUTPUT_STRIPS.forEach(stripDef => {
+    const strip = document.createElement('div');
+    strip.className = 'strip stereo';
+    strip.id = 'strip-out-' + stripDef.id;
+    if (outState[stripDef.id].mute) strip.classList.add('muted');
+
+    const labelRow = document.createElement('div');
+    labelRow.className = 'strip-label-row';
+    const labelEl = document.createElement('div');
+    labelEl.className = 'strip-label';
+    labelEl.contentEditable = 'true';
+    labelEl.textContent = outLabels[stripDef.id];
+    labelEl.addEventListener('blur', () => {
+      const text = labelEl.textContent.trim() || stripDef.defaultLabel;
+      labelEl.textContent = text; outLabels[stripDef.id] = text;
+      QRC.component.set('Labels', [{ Name: stripDef.labelPin, Value: text }]);
+    });
+    labelEl.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); labelEl.blur(); } });
+    const outEqBtn = document.createElement('button');
+    outEqBtn.className = 'strip-eq-btn';
+    outEqBtn.textContent = '⋮';
+    outEqBtn.title = 'Processing';
+    outEqBtn.addEventListener('click', e => {
+      e.stopPropagation();
+      openProcessingSheet({
+        name:     outLabels[stripDef.id] || stripDef.defaultLabel,
+        hpfComp:  stripDef.hpfComp,
+        lpfComp:  stripDef.lpfComp,
+        eqComp:   stripDef.eqComp,
+        compComp: null,
+        afcComp:  null,
+        gateComp: null,
+      });
+    });
+    labelRow.appendChild(labelEl);
+    labelRow.appendChild(outEqBtn);
+    strip.appendChild(labelRow);
+
+    const muteBtn = document.createElement('button');
+    muteBtn.className = 'mute-btn';
+    muteBtn.textContent = outState[stripDef.id].mute ? 'MUTED' : 'MUTE';
+    muteBtn.addEventListener('click', () => toggleOutputMute(stripDef));
+    strip.appendChild(muteBtn);
+
+    const faderVuRow = document.createElement('div');
+    faderVuRow.className = 'fader-vu-row';
+    const faderWrap = document.createElement('div');
+    faderWrap.className = 'fader-wrap';
+    const track = document.createElement('div'); track.className = 'fader-track'; faderWrap.appendChild(track);
+    const zeroLine = document.createElement('div'); zeroLine.className = 'fader-zero';
+    zeroLine.style.bottom = (dbToPos(0) * 100) + '%'; faderWrap.appendChild(zeroLine);
+    const handle = document.createElement('div'); handle.className = 'fader-handle';
+    handle.style.bottom = (dbToPos(outState[stripDef.id].gain) * 100) + '%'; faderWrap.appendChild(handle);
+    wireOutputFader(faderWrap, handle, stripDef);
+    faderVuRow.appendChild(faderWrap);
+
+    const vu = document.createElement('div');
+    vu.className = 'vu-col'; vu.id = 'out-vu-' + stripDef.id;
+    for (let s = 0; s < VU_SEGS; s++) { const seg = document.createElement('div'); seg.className = 'vu-seg'; vu.appendChild(seg); }
+    faderVuRow.appendChild(vu);
+    strip.appendChild(faderVuRow);
+
+    const dbEl = document.createElement('div'); dbEl.className = 'db-readout';
+    dbEl.textContent = formatDb(outState[stripDef.id].gain); strip.appendChild(dbEl);
+
+    const delayRow = document.createElement('div'); delayRow.className = 'delay-row';
+    const delayLabel = document.createElement('div'); delayLabel.className = 'delay-label'; delayLabel.textContent = 'DELAY';
+    const delayVal = document.createElement('div'); delayVal.className = 'delay-value';
+    delayVal.id = 'delay-val-' + stripDef.id; delayVal.textContent = outState[stripDef.id].delay.toFixed(1) + ' ms';
+    const minusBtn = document.createElement('button'); minusBtn.className = 'delay-btn'; minusBtn.textContent = '−';
+    minusBtn.addEventListener('click', () => adjustDelay(stripDef, -0.1));
+    const plusBtn = document.createElement('button'); plusBtn.className = 'delay-btn'; plusBtn.textContent = '+';
+    plusBtn.addEventListener('click', () => adjustDelay(stripDef, 0.1));
+    delayRow.appendChild(delayLabel); delayRow.appendChild(delayVal);
+    delayRow.appendChild(minusBtn); delayRow.appendChild(plusBtn);
+    strip.appendChild(delayRow);
+
+    container.appendChild(strip);
+  });
+}
+
+function wireOutputFader(wrap, handle, stripDef) {
+  let dragging = false, startY = 0, startPos = 0;
+  function getPos() { return dbToPos(outState[stripDef.id].gain); }
+  function applyPos(pos) {
+    const p = Math.max(0, Math.min(1, pos));
+    handle.style.bottom = (p * 100) + '%';
+    const db = posToDb(p);
+    const strip = handle.closest('.strip');
+    if (strip) strip.querySelector('.db-readout').textContent = formatDb(db);
+    return { db };
+  }
+  function onDown(e) {
+    e.preventDefault(); dragging = true;
+    startY = e.touches ? e.touches[0].clientY : e.clientY; startPos = getPos();
+    document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp);
+    document.addEventListener('touchmove', onMove, { passive: false }); document.addEventListener('touchend', onUp);
+  }
+  function onMove(e) {
+    if (!dragging) return; e.preventDefault();
+    const y = e.touches ? e.touches[0].clientY : e.clientY;
+    applyPos(startPos + (startY - y) / wrap.getBoundingClientRect().height);
+  }
+  function onUp(e) {
+    if (!dragging) return; dragging = false;
+    document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp);
+    document.removeEventListener('touchmove', onMove); document.removeEventListener('touchend', onUp);
+    const y = e.changedTouches ? e.changedTouches[0].clientY : e.clientY;
+    const { db } = applyPos(startPos + (startY - y) / wrap.getBoundingClientRect().height);
+    outState[stripDef.id].gain = db;
+    QRC.component.set(stripDef.gainComp, [{ Name:'gain', Value:db }]);
+  }
+  handle.addEventListener('mousedown', onDown);
+  handle.addEventListener('touchstart', onDown, { passive: false });
+  wrap.addEventListener('click', e => {
+    if (e.target === handle) return;
+    const rect = wrap.getBoundingClientRect();
+    const { db } = applyPos(1 - (e.clientY - rect.top) / rect.height);
+    outState[stripDef.id].gain = db;
+    QRC.component.set(stripDef.gainComp, [{ Name:'gain', Value:db }]);
+  });
+}
+
+function toggleOutputMute(stripDef) {
+  const muted = !outState[stripDef.id].mute;
+  outState[stripDef.id].mute = muted;
+  const strip = document.getElementById('strip-out-' + stripDef.id);
+  if (strip) {
+    strip.classList.toggle('muted', muted);
+    strip.querySelector('.mute-btn').textContent = muted ? 'MUTED' : 'MUTE';
+  }
+  QRC.component.set(stripDef.gainComp, [{ Name:'mute', Value: muted ? 1 : 0 }]);
+}
+
+function adjustDelay(stripDef, delta) {
+  const newMs = Math.max(0, Math.min(500, outState[stripDef.id].delay + delta));
+  outState[stripDef.id].delay = newMs;
+  const el = document.getElementById('delay-val-' + stripDef.id);
+  if (el) el.textContent = newMs.toFixed(1) + ' ms';
+  QRC.component.set(stripDef.delayComp, [{ Name:'delay', Value:newMs }]);
+}
+
+function updateOutputVU(id, db) {
+  const el = document.getElementById('out-vu-' + id);
+  if (!el) return;
+  const lit = dbToSegments(db);
+  el.querySelectorAll('.vu-seg').forEach((seg, i) => {
+    if (i < lit) {
+      const d = VU_MIN_DB + (i / VU_SEGS) * (VU_MAX_DB - VU_MIN_DB);
+      seg.style.background = d >= VU_CLIP_DB ? 'var(--vu-clip)' : d >= VU_MID_DB ? 'var(--vu-mid)' : 'var(--vu-low)';
+    } else { seg.style.background = 'var(--vu-off)'; }
+  });
+}
+
+function loadOutputState() {
+  OUTPUT_STRIPS.forEach(stripDef => {
+    QRC.component.get(stripDef.gainComp, ['gain', 'mute'], function(controls) {
+      controls.forEach(c => {
+        if (c.Name === 'gain') outState[stripDef.id].gain = c.Value;
+        else if (c.Name === 'mute') outState[stripDef.id].mute = !!c.Value;
+      });
+      const strip = document.getElementById('strip-out-' + stripDef.id);
+      if (strip) {
+        strip.classList.toggle('muted', outState[stripDef.id].mute);
+        strip.querySelector('.mute-btn').textContent = outState[stripDef.id].mute ? 'MUTED' : 'MUTE';
+        strip.querySelector('.fader-handle').style.bottom = (dbToPos(outState[stripDef.id].gain) * 100) + '%';
+        strip.querySelector('.db-readout').textContent = formatDb(outState[stripDef.id].gain);
+      }
+    });
+    QRC.component.get(stripDef.delayComp, ['delay'], function(controls) {
+      if (controls[0]) {
+        outState[stripDef.id].delay = controls[0].Value;
+        const el = document.getElementById('delay-val-' + stripDef.id);
+        if (el) el.textContent = controls[0].Value.toFixed(1) + ' ms';
+      }
+    });
+  });
+
+  QRC.component.get('Labels', OUTPUT_STRIPS.map(s => s.labelPin), function(controls) {
+    controls.forEach(c => {
+      const s = OUTPUT_STRIPS.find(x => x.labelPin === c.Name);
+      if (s && c.Value) {
+        outLabels[s.id] = c.Value;
+        const el = document.querySelector(`#strip-out-${s.id} .strip-label`);
+        if (el) el.textContent = c.Value;
+      }
+    });
+  });
+
+  QRC.changeGroup.create('vu_outputs');
+  OUTPUT_STRIPS.forEach(s => QRC.changeGroup.addComponentControl('vu_outputs', { Name:'Meter', Control:`meter.${s.meterCh}` }));
+  QRC.changeGroup.poll('vu_outputs', 40, function(changes) {
+    changes.forEach(c => {
+      const ch = parseInt(c.Name.split('.')[1]);
+      const s = OUTPUT_STRIPS.find(x => x.meterCh === ch);
+      if (s) updateOutputVU(s.id, c.Value);
+    });
+  });
+}
+
+buildOutputStrips();
+</script>
+
+<!-- ── PATCH tab ───────────────────────────────────────────────────────────── -->
+<script>
+const INPUT_SOURCE_NAMES = {
+  1:'IN 1',    2:'IN 2',    3:'IN 3',    4:'IN 4',
+  5:'IN 5',    6:'IN 6',    7:'IN 7',    8:'IN 8',
+  9:'Flex 1',  10:'Flex 2', 11:'Flex 3', 12:'Flex 4',
+  13:'Flex 5', 14:'Flex 6', 15:'Flex 7', 16:'Flex 8',
+  17:'Dante 1', 18:'Dante 2', 19:'Dante 3', 20:'Dante 4',
+  21:'Dante 5', 22:'Dante 6', 23:'Dante 7', 24:'Dante 8',
+};
+
+// out: router output number(s). Mono = one output, stereo = [L, R] independently assignable.
+const ROUTER_ROWS = [
+  { label:'Mic 1',                mono:true,  out:[1]      },
+  { label:'Mic 2',                mono:true,  out:[2]      },
+  { label:'Mic 3',                mono:true,  out:[3]      },
+  { label:'Mic 4',                mono:true,  out:[4]      },
+  { label:'Mic 5',                mono:true,  out:[5]      },
+  { label:'Mic 6',                mono:true,  out:[6]      },
+  { label:'Mic 7',                mono:true,  out:[7]      },
+  { label:'Mic 8',                mono:true,  out:[8]      },
+  { label:'STYB',mono:false, out:[9,  10] },
+  { label:'Spotify',              mono:false, out:[11, 12] },
+  { label:'Zoom RX',              mono:false, out:[13, 14] },
+  { label:'Slides',               mono:false, out:[15, 16] },
+];
+
+function makeSourceSelect(outputN) {
+  const select = document.createElement('select');
+  select.className = 'router-select';
+  select.dataset.output = outputN;
+  for (let inp = 1; inp <= 24; inp++) {
+    const opt = document.createElement('option');
+    opt.value = inp;
+    opt.textContent = INPUT_SOURCE_NAMES[inp] || ('Input ' + inp);
+    select.appendChild(opt);
+  }
+  select.addEventListener('change', function() {
+    QRC.component.set('Input.Router', [{ Name:`output.${this.dataset.output}.select`, Value:parseInt(this.value) }]);
+  });
+  return select;
+}
+
+function buildPatchTab() {
+  // Phantom power buttons
+  const grid = document.getElementById('phantom-grid');
+  grid.innerHTML = '';
+  for (let i = 1; i <= 8; i++) {
+    const btn = document.createElement('button');
+    btn.className = 'phantom-btn';
+    btn.textContent = '48V';
+    btn.dataset.channel = i;
+    btn.addEventListener('click', function() {
+      const ch = parseInt(this.dataset.channel);
+      const newVal = this.classList.contains('on') ? 0 : 1;
+      this.classList.toggle('on', !!newVal);
+      this.textContent = newVal ? '48V ●' : '48V';
+      QRC.component.set('Analog.Inputs', [{ Name:`channel.${ch}.phantom.power`, Value:newVal }]);
+    });
+    grid.appendChild(btn);
+  }
+
+  // Router table
+  const tbody = document.getElementById('router-tbody');
+  tbody.innerHTML = '';
+  ROUTER_ROWS.forEach(function(row) {
+    const tr = document.createElement('tr');
+    const labelCell = document.createElement('td');
+    labelCell.className = 'router-label';
+    labelCell.textContent = row.label;
+    tr.appendChild(labelCell);
+
+    const selectCell = document.createElement('td');
+    selectCell.style.display = 'flex'; selectCell.style.alignItems = 'center'; selectCell.style.gap = '6px';
+    if (row.mono) {
+      selectCell.appendChild(makeSourceSelect(row.out[0]));
+    } else {
+      const lLabel = document.createElement('span');
+      lLabel.className = 'router-ch-label'; lLabel.textContent = 'L';
+      const rLabel = document.createElement('span');
+      rLabel.className = 'router-ch-label'; rLabel.textContent = 'R';
+      selectCell.appendChild(lLabel);
+      selectCell.appendChild(makeSourceSelect(row.out[0]));
+      selectCell.appendChild(rLabel);
+      selectCell.appendChild(makeSourceSelect(row.out[1]));
+    }
+    tr.appendChild(selectCell);
+    tbody.appendChild(tr);
+  });
+}
+
+function loadPatchState() {
+  const phantomControls = Array.from({length:8}, (_, i) => `channel.${i+1}.phantom.power`);
+  QRC.component.get('Analog.Inputs', phantomControls, function(controls) {
+    controls.forEach(c => {
+      const match = c.Name.match(/channel\.(\d+)\.phantom\.power/);
+      if (!match) return;
+      const btn = document.querySelector(`#phantom-grid [data-channel="${match[1]}"]`);
+      if (btn) { const on = !!c.Value; btn.classList.toggle('on', on); btn.textContent = on ? '48V ●' : '48V'; }
+    });
+  });
+
+  const routerControls = [];
+  ROUTER_ROWS.forEach(row => row.out.forEach(n => routerControls.push(`output.${n}.select`)));
+  QRC.component.get('Input.Router', routerControls, function(controls) {
+    controls.forEach(c => {
+      const match = c.Name.match(/output\.(\d+)\.select/);
+      if (!match) return;
+      const select = document.querySelector(`#router-tbody [data-output="${match[1]}"]`);
+      if (select) select.value = c.Value;
+    });
+  });
+}
+
+buildPatchTab();
+</script>
+
+<!-- ── ROUTING tab ─────────────────────────────────────────────────────────── -->
+<script>
+const ROUTING_INPUTS = [
+  { n:1,  label:'Mic 1'               }, { n:2,  label:'Mic 2'    },
+  { n:3,  label:'Mic 3'               }, { n:4,  label:'Mic 4'    },
+  { n:5,  label:'Mic 5'               }, { n:6,  label:'Mic 6'    },
+  { n:7,  label:'Mic 7'               }, { n:8,  label:'Mic 8'    },
+  { n:9,  label:'STYB' }, { n:10, label:'Spotify'  },
+  { n:11, label:'Zoom RX'             }, { n:12, label:'Slides'    },
+];
+
+const ROUTING_BUSES = [
+  { m:1, label:'Mic Room'    }, { m:2, label:'Mic Zoom'    },
+  { m:3, label:'Music Room'  }, { m:4, label:'Music Zoom'  },
+  { m:5, label:'Slides Room' }, { m:6, label:'Slides Zoom' },
+  { m:7, label:'Zoom Return' },
+];
+
+const BUS_OUT_ROWS = BUS_STRIPS;
+const BUS_OUT_COLS = [
+  { outSlot:1, label:'Mains' }, { outSlot:3, label:'Zoom TX' }, { outSlot:5, label:'Rec' },
+];
+
+const ibGain = {};
+const boGain = {};
+
+// ── helpers ──────────────────────────────────────────────────────────────────
+
+function xpClass(db) {
+  if (db == null || db <= -60) return 'xp-off';
+  if (db >= -0.5) return 'xp-on';
+  return 'xp-trim';
+}
+
+function xpLabel(db) {
+  if (db == null || db <= -60) return '−∞';
+  if (Math.abs(db) < 0.1) return '0 dB';
+  return db.toFixed(1);
+}
+
+function cellId(prefix, a, b) { return `xp-${prefix}-${a}-${b}`; }
+
+function makeCell(id, db, onShortPress, onLongPress) {
+  const td = document.createElement('td');
+  td.className = 'xp-cell ' + xpClass(db);
+  td.id = id;
+  td.textContent = xpLabel(db);
+
+  let pressTimer = null;
+  let longFired = false;
+
+  td.addEventListener('pointerdown', e => {
+    if (!e.isPrimary) return;
+    longFired = false;
+    pressTimer = setTimeout(() => { longFired = true; onLongPress(); }, 450);
+  });
+  td.addEventListener('pointermove', e => {
+    if (!e.isPrimary) return;
+    if (Math.abs(e.movementX) + Math.abs(e.movementY) > 6) {
+      clearTimeout(pressTimer); longFired = true;
+    }
+  });
+  td.addEventListener('pointerup',     () => clearTimeout(pressTimer));
+  td.addEventListener('pointercancel', () => { clearTimeout(pressTimer); longFired = true; });
+  td.addEventListener('click',         () => { if (!longFired) onShortPress(); });
+
+  return td;
+}
+
+function updateCell(id, db) {
+  const td = document.getElementById(id);
+  if (!td) return;
+  td.className = 'xp-cell ' + xpClass(db);
+  td.textContent = xpLabel(db);
+}
+
+// ── table builders ───────────────────────────────────────────────────────────
+
+function buildInputBusTable() {
+  const table = document.getElementById('input-bus-table');
+  table.innerHTML = '';
+  const thead = table.createTHead();
+  const hr = thead.insertRow();
+  const corner = document.createElement('th'); corner.className = 'rt-corner'; hr.appendChild(corner);
+  ROUTING_BUSES.forEach(bus => {
+    const th = document.createElement('th'); th.className = 'rt-col-hdr';
+    const inner = document.createElement('div'); inner.className = 'rt-col-hdr-inner';
+    inner.textContent = bus.label; th.appendChild(inner); hr.appendChild(th);
+  });
+  const tbody = table.createTBody();
+  ROUTING_INPUTS.forEach(inp => {
+    const row = tbody.insertRow();
+    const rh = document.createElement('td'); rh.className = 'rt-row-hdr'; rh.textContent = inp.label;
+    row.appendChild(rh);
+    ROUTING_BUSES.forEach(bus => {
+      const id = cellId('ib', inp.n, bus.m);
+      const ctx = {
+        id, title: `${inp.label} → ${bus.label}`,
+        getDb: () => ibGain[inp.n]?.[bus.m] ?? -100,
+        setDb: db => {
+          ibGain[inp.n] = ibGain[inp.n] || {}; ibGain[inp.n][bus.m] = db;
+          updateCell(id, db);
+          QRC.component.set('Input.Mixer', [{ Name: `input.${inp.n}.output.${bus.m}.gain`, Value: db }]);
+        },
+      };
+      row.appendChild(makeCell(id, ibGain[inp.n]?.[bus.m],
+        () => toggleXP(ctx),
+        () => openXPPopover(ctx)
+      ));
+    });
+  });
+}
+
+function buildBusOutputTable() {
+  const table = document.getElementById('bus-output-table');
+  table.innerHTML = '';
+  const thead = table.createTHead();
+  const hr = thead.insertRow();
+  const corner = document.createElement('th'); corner.className = 'rt-corner'; hr.appendChild(corner);
+  BUS_OUT_COLS.forEach(col => {
+    const th = document.createElement('th'); th.className = 'rt-col-hdr';
+    const inner = document.createElement('div'); inner.className = 'rt-col-hdr-inner';
+    inner.textContent = col.label; th.appendChild(inner); hr.appendChild(th);
+  });
+  const tbody = table.createTBody();
+  BUS_OUT_ROWS.forEach(bus => {
+    const row = tbody.insertRow();
+    const rh = document.createElement('td'); rh.className = 'rt-row-hdr'; rh.textContent = bus.defaultLabel;
+    row.appendChild(rh);
+    BUS_OUT_COLS.forEach(col => {
+      const id = cellId('bo', bus.id, col.outSlot);
+      const ctx = {
+        id, title: `${bus.defaultLabel} → ${col.label}`,
+        getDb: () => boGain[bus.id]?.[col.outSlot] ?? -100,
+        setDb: db => {
+          boGain[bus.id] = boGain[bus.id] || {}; boGain[bus.id][col.outSlot] = db;
+          updateCell(id, db);
+          QRC.component.set('Bus.Mixer', [{ Name: `input.${bus.mixerSlot}.output.${col.outSlot}.gain`, Value: db }]);
+        },
+      };
+      row.appendChild(makeCell(id, boGain[bus.id]?.[col.outSlot],
+        () => toggleXP(ctx),
+        () => openXPPopover(ctx)
+      ));
+    });
+  });
+}
+
+// ── crosspoint toggle (short press) ─────────────────────────────────────────
+
+function toggleXP(ctx) {
+  const db = ctx.getDb();
+  ctx.setDb(db <= -60 ? 0 : -100);
+}
+
+// ── crosspoint popover (long press) ──────────────────────────────────────────
+
+let xpCtx = null;
+
+function openXPPopover(ctx) {
+  xpCtx = ctx;
+  const db = ctx.getDb();
+  const isOn = db > -60;
+
+  document.getElementById('xp-pop-title').textContent = ctx.title;
+  const toggle = document.getElementById('xp-pop-toggle');
+  toggle.textContent = isOn ? 'ON — tap to turn off' : 'OFF — tap to turn on';
+  toggle.className = 'xp-pop-toggle ' + (isOn ? 'on' : 'off');
+
+  const slider = document.getElementById('xp-pop-slider');
+  slider.value = isOn ? db : 0;
+  slider.disabled = !isOn;
+
+  document.getElementById('xp-pop-db').textContent = isOn ? xpLabel(db) : '−∞';
+  document.getElementById('xp-popover').removeAttribute('hidden');
+  document.getElementById('xp-overlay').removeAttribute('hidden');
+}
+
+function closeXPPopover() {
+  document.getElementById('xp-popover').setAttribute('hidden', '');
+  document.getElementById('xp-overlay').setAttribute('hidden', '');
+  xpCtx = null;
+}
+
+document.getElementById('xp-pop-toggle').addEventListener('click', () => {
+  if (!xpCtx) return;
+  const db = xpCtx.getDb();
+  const isOn = db > -60;
+  const newDb = isOn ? -100 : 0;
+  xpCtx.setDb(newDb);
+
+  const toggle = document.getElementById('xp-pop-toggle');
+  const slider = document.getElementById('xp-pop-slider');
+  const nowOn = newDb > -60;
+  toggle.textContent = nowOn ? 'ON — tap to turn off' : 'OFF — tap to turn on';
+  toggle.className = 'xp-pop-toggle ' + (nowOn ? 'on' : 'off');
+  slider.value = nowOn ? newDb : 0;
+  slider.disabled = !nowOn;
+  document.getElementById('xp-pop-db').textContent = nowOn ? xpLabel(newDb) : '−∞';
+});
+
+document.getElementById('xp-pop-slider').addEventListener('input', function() {
+  if (!xpCtx) return;
+  const db = parseFloat(this.value);
+  xpCtx.setDb(db);
+  document.getElementById('xp-pop-db').textContent = xpLabel(db);
+});
+
+document.getElementById('xp-pop-slider').addEventListener('change', function() {
+  // Final commit already handled by 'input' event — nothing extra needed
+});
+
+document.getElementById('xp-pop-close').addEventListener('click', closeXPPopover);
+document.getElementById('xp-overlay').addEventListener('click', closeXPPopover);
+
+// ── load from Core ────────────────────────────────────────────────────────────
+
+function loadRoutingState() {
+  const ibControls = [];
+  ROUTING_INPUTS.forEach(inp => ROUTING_BUSES.forEach(bus =>
+    ibControls.push(`input.${inp.n}.output.${bus.m}.gain`)
+  ));
+  QRC.component.get('Input.Mixer', ibControls, function(controls) {
+    controls.forEach(c => {
+      const match = c.Name.match(/input\.(\d+)\.output\.(\d+)\.gain/);
+      if (!match) return;
+      const n = parseInt(match[1]), m = parseInt(match[2]);
+      ibGain[n] = ibGain[n] || {}; ibGain[n][m] = c.Value;
+      updateCell(cellId('ib', n, m), c.Value);
+    });
+  });
+
+  const boControls = [];
+  BUS_OUT_ROWS.forEach(bus => BUS_OUT_COLS.forEach(col =>
+    boControls.push(`input.${bus.mixerSlot}.output.${col.outSlot}.gain`)
+  ));
+  QRC.component.get('Bus.Mixer', boControls, function(controls) {
+    controls.forEach(c => {
+      const match = c.Name.match(/input\.(\d+)\.output\.(\d+)\.gain/);
+      if (!match) return;
+      const slot = parseInt(match[1]), outSlot = parseInt(match[2]);
+      const bus = BUS_OUT_ROWS.find(b => b.mixerSlot === slot);
+      if (!bus) return;
+      boGain[bus.id] = boGain[bus.id] || {}; boGain[bus.id][outSlot] = c.Value;
+      updateCell(cellId('bo', bus.id, outSlot), c.Value);
+    });
+  });
+}
+
+buildInputBusTable();
+buildBusOutputTable();
+</script>
+
+<!-- ── PROCESSING SHEET ─────────────────────────────────────────────────────── -->
+<script>
+// ── Format helpers ────────────────────────────────────────────────────────────
+function formatFreq(hz) {
+  hz = parseFloat(hz);
+  if (hz < 1000) return Math.round(hz) + ' Hz';
+  if (hz < 10000) return (hz / 1000).toFixed(1) + ' kHz';
+  return Math.round(hz / 1000) + ' kHz';
+}
+function formatGain(db) { db = parseFloat(db); return (db >= 0 ? '+' : '') + db.toFixed(1) + ' dB'; }
+function formatBW(oct)   { return parseFloat(oct).toFixed(2) + ' oct'; }
+function formatMs(ms)    { ms = parseFloat(ms); return ms >= 1000 ? (ms/1000).toFixed(2) + ' s' : ms.toFixed(1) + ' ms'; }
+function formatRatio(r)  { return parseFloat(r).toFixed(1) + ':1'; }
+
+// ── Bypass button helper ──────────────────────────────────────────────────────
+function setBypassBtn(btn, bypassValue) {
+  const on = bypassValue === 0;
+  btn.classList.toggle('active', on);
+  btn.textContent = on ? 'ON' : 'OFF';
+}
+
+// ── Sheet open/close/tab ──────────────────────────────────────────────────────
+window.procSheet = null;
+
+function drawEQCurve() {
+  if (!document.getElementById('eq-response-path')) return;
+  const hpfBypassed = !document.getElementById('proc-hpf-bypass').classList.contains('active');
+  const lpfBypassed = !document.getElementById('proc-lpf-bypass').classList.contains('active');
+  const hpfFreq = parseFloat(document.getElementById('proc-hpf-freq').value);
+  const lpfFreq = parseFloat(document.getElementById('proc-lpf-freq').value);
+  const bands = [1,2,3,4].map(n => ({
+    bypassed: !document.getElementById('proc-eq-bypass-' + n).classList.contains('active'),
+    freq:     parseFloat(document.getElementById('proc-eq-freq-' + n).value),
+    gain:     parseFloat(document.getElementById('proc-eq-gain-' + n).value),
+    bw:       parseFloat(document.getElementById('proc-eq-bw-' + n).value),
+  }));
+
+  const pts = [];
+  for (let i = 0; i < EQ_N_POINTS; i++) {
+    const t = i / (EQ_N_POINTS - 1);
+    const f = Math.pow(10, Math.log10(EQ_FREQ_MIN) + t * (Math.log10(EQ_FREQ_MAX) - Math.log10(EQ_FREQ_MIN)));
+    let db = eqHpfDb(f, hpfFreq, hpfBypassed) + eqLpfDb(f, lpfFreq, lpfBypassed);
+    bands.forEach(b => { db += eqPeakingDb(f, b.freq, b.gain, b.bw, b.bypassed); });
+    pts.push({ x: eqFreqToX(f), y: eqDbToY(db) });
+  }
+
+  const stroke = pts.map((p, i) => (i === 0 ? 'M' : 'L') + p.x.toFixed(1) + ',' + p.y.toFixed(1)).join(' ');
+  const zeroY = eqDbToY(0).toFixed(1);
+  const fill = stroke + ' L' + pts[pts.length-1].x.toFixed(1) + ',' + zeroY + ' L' + pts[0].x.toFixed(1) + ',' + zeroY + ' Z';
+
+  document.getElementById('eq-response-path').setAttribute('d', stroke);
+  document.getElementById('eq-response-fill').setAttribute('d', fill);
+
+  // Update handle positions
+  bands.forEach((b, i) => {
+    const h = document.getElementById('eq-handle-' + (i + 1));
+    var xPct = (eqFreqToX(b.freq) / EQ_SVG_W * 100).toFixed(2) + '%';
+    var yPct = (eqDbToY(b.gain) / EQ_SVG_H * 100).toFixed(2) + '%';
+    h.style.left = xPct;
+    h.style.top = yPct;
+    h.style.opacity = b.bypassed ? '0.3' : '1';
+  });
+}
+
+// ── EQ handle drag ────────────────────────────────────────────────────────────
+let eqDrag = null; // { band:1-4, moved:bool }
+let eqSelectedBand = null;
+
+function selectEQBand(n) {
+  eqSelectedBand = n;
+  [1,2,3,4].forEach(i => {
+    const col = document.getElementById('proc-eq-band-col-' + i);
+    if (col) col.style.outline = i === n ? ('2px solid ' + BAND_COLORS[i-1]) : '';
+  });
+}
+
+function eqSVGPoint(svg, clientX, clientY) {
+  const rect = svg.getBoundingClientRect();
+  return {
+    x: (clientX - rect.left) / rect.width * EQ_SVG_W,
+    y: (clientY - rect.top) / rect.height * EQ_SVG_H,
+  };
+}
+
+[1,2,3,4].forEach(function(n) {
+  const handle = document.getElementById('eq-handle-' + n);
+
+  handle.addEventListener('pointerdown', function(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    handle.setPointerCapture(e.pointerId);
+    eqDrag = { band: n, moved: false };
+    selectEQBand(n);
+  });
+
+  handle.addEventListener('pointermove', function(e) {
+    if (!eqDrag || eqDrag.band !== n) return;
+    const svg = document.getElementById('eq-curve-svg');
+    const pt = eqSVGPoint(svg, e.clientX, e.clientY);
+
+    const newFreq = Math.round(Math.max(20, Math.min(20000, eqXToFreq(pt.x))));
+    const rawGain = eqYToDb(pt.y);
+    const newGain = Math.round(Math.max(-12, Math.min(12, rawGain)) * 10) / 10;
+
+    document.getElementById('proc-eq-freq-' + n).value = newFreq;
+    document.getElementById('proc-eq-freq-val-' + n).textContent = formatFreq(newFreq);
+    document.getElementById('proc-eq-gain-' + n).value = newGain;
+    document.getElementById('proc-eq-gain-val-' + n).textContent = formatGain(newGain);
+
+    eqDrag.moved = true;
+    drawEQCurve();
+  });
+
+  handle.addEventListener('pointerup', function(e) {
+    if (!eqDrag || eqDrag.band !== n) return;
+    if (eqDrag.moved && window.procSheet && window.procSheet.eqComp) {
+      QRC.component.set(window.procSheet.eqComp, [
+        { Name: 'frequency.' + n, Value: parseFloat(document.getElementById('proc-eq-freq-' + n).value) },
+        { Name: 'gain.' + n,      Value: parseFloat(document.getElementById('proc-eq-gain-' + n).value) },
+      ]);
+    }
+    eqDrag = null;
+  });
+
+  handle.addEventListener('pointercancel', function() {
+    eqDrag = null;
+  });
+});
+
+// ── Meters drawer ─────────────────────────────────────────────────────────────
+const DRAWER_STATES = ['collapsed', 'half-open', 'full-screen'];
+let drawerState = 'collapsed';
+
+function setDrawerState(state) {
+  const drawer = document.getElementById('meters-drawer');
+  DRAWER_STATES.forEach(s => drawer.classList.remove(s));
+  drawer.classList.add(state);
+  drawerState = state;
+  const arrow = document.getElementById('meters-arrow');
+  arrow.textContent = state === 'full-screen' ? '↓' : state === 'half-open' ? '↕' : '↑';
+  if (state === 'collapsed') pauseVuAll(); else resumeVuAll();
+}
+
+(function wireDrawerGesture() {
+  const handle = document.getElementById('meters-handle');
+  let swipeStartY = null;
+  let swipeStartX = null;
+  let swipeHandled = false;
+
+  handle.addEventListener('pointerdown', function(e) {
+    swipeStartY = e.clientY;
+    swipeStartX = e.clientX;
+    swipeHandled = false;
+  });
+
+  handle.addEventListener('pointerup', function(e) {
+    if (swipeStartY === null) return;
+    const delta = swipeStartY - e.clientY;
+    if (Math.abs(delta) > 30 && Math.abs(delta) > Math.abs(e.clientX - swipeStartX)) {
+      const idx = DRAWER_STATES.indexOf(drawerState);
+      if (delta > 0) setDrawerState(DRAWER_STATES[Math.min(idx + 1, DRAWER_STATES.length - 1)]);
+      else           setDrawerState(DRAWER_STATES[Math.max(idx - 1, 0)]);
+      swipeHandled = true;
+    }
+    swipeStartY = null;
+  });
+
+  handle.addEventListener('click', function() {
+    if (swipeHandled) { swipeHandled = false; return; }
+    const idx = DRAWER_STATES.indexOf(drawerState);
+    setDrawerState(DRAWER_STATES[(idx + 1) % DRAWER_STATES.length]);
+  });
+})();
+
+const DRAWER_CHANNELS = [
+  // group, id, label, meterCh (array of 1 or 2 channels), isStereo, stripId
+  // INPUTS
+  { group:'inputs', id:'dmic1',   label:'M1',  meterCh:[1],     isStereo:false, stripId:'mic1'      },
+  { group:'inputs', id:'dmic2',   label:'M2',  meterCh:[2],     isStereo:false, stripId:'mic2'      },
+  { group:'inputs', id:'dmic3',   label:'M3',  meterCh:[3],     isStereo:false, stripId:'mic3'      },
+  { group:'inputs', id:'dmic4',   label:'M4',  meterCh:[4],     isStereo:false, stripId:'mic4'      },
+  { group:'inputs', id:'dmic5',   label:'M5',  meterCh:[5],     isStereo:false, stripId:'mic5'      },
+  { group:'inputs', id:'dmic6',   label:'M6',  meterCh:[6],     isStereo:false, stripId:'mic6'      },
+  { group:'inputs', id:'dmic7',   label:'M7',  meterCh:[7],     isStereo:false, stripId:'mic7'      },
+  { group:'inputs', id:'dmic8',   label:'M8',  meterCh:[8],     isStereo:false, stripId:'mic8'      },
+  { group:'inputs', id:'dstby',   label:'SB',  meterCh:[9,10],  isStereo:true,  stripId:'stby'      },
+  { group:'inputs', id:'dsptfy',  label:'SP',  meterCh:[11,12], isStereo:true,  stripId:'sptfy'     },
+  { group:'inputs', id:'dzoomrx', label:'ZR',  meterCh:[13,14], isStereo:true,  stripId:'zoomrx'    },
+  { group:'inputs', id:'dslides', label:'SL',  meterCh:[15,16], isStereo:true,  stripId:'slides'    },
+  // BUSES
+  { group:'buses',  id:'dmcr',    label:'McR', meterCh:[17],    isStereo:false, stripId:'microom'   },
+  { group:'buses',  id:'dmcz',    label:'McZ', meterCh:[18],    isStereo:false, stripId:'miczoom'   },
+  { group:'buses',  id:'dmsr',    label:'MsR', meterCh:[19,20], isStereo:true,  stripId:'musicroom' },
+  { group:'buses',  id:'dmsz',    label:'MsZ', meterCh:[21,22], isStereo:true,  stripId:'musiczoom' },
+  { group:'buses',  id:'dslr',    label:'SlR', meterCh:[23,24], isStereo:true,  stripId:'slidesroom'},
+  { group:'buses',  id:'dslz',    label:'SlZ', meterCh:[25,26], isStereo:true,  stripId:'slideszoom'},
+  { group:'buses',  id:'dzrn',    label:'ZRn', meterCh:[27,28], isStereo:true,  stripId:'zoomrtn'   },
+  // OUTPUTS
+  { group:'outputs',id:'dmains',  label:'MN',  meterCh:[29,30], isStereo:true,  stripId:'mains'     },
+  { group:'outputs',id:'dzoomtx', label:'ZX',  meterCh:[31,32], isStereo:true,  stripId:'zoomtx'    },
+  { group:'outputs',id:'drec',    label:'RC',  meterCh:[33,34], isStereo:true,  stripId:'rec'       },
+];
+
+const DRAWER_GROUP_LABELS = { inputs:'Inputs', buses:'Buses', outputs:'Outputs' };
+const VU_SEGS_DRAWER = 20;
+
+function buildDrawerContent() {
+  const content = document.getElementById('meters-content');
+  content.innerHTML = '';
+  const groups = ['inputs', 'buses', 'outputs'];
+  groups.forEach(function(grp) {
+    const channels = DRAWER_CHANNELS.filter(function(c) { return c.group === grp; });
+    const wrap = document.createElement('div');
+    wrap.className = 'meters-group-wrap';
+
+    const title = document.createElement('div');
+    title.className = 'meters-group-title';
+    title.textContent = DRAWER_GROUP_LABELS[grp];
+    wrap.appendChild(title);
+
+    const group = document.createElement('div');
+    group.className = 'meters-group';
+
+    channels.forEach(function(ch) {
+      const col = document.createElement('div');
+      col.className = 'meter-col';
+      col.id = 'drawer-col-' + ch.id;
+
+      const lbl = document.createElement('div');
+      lbl.className = 'meter-col-label';
+      lbl.textContent = ch.label;
+      col.appendChild(lbl);
+
+      const barsDiv = document.createElement('div');
+      barsDiv.className = 'meter-col-bars';
+      barsDiv.id = 'drawer-bars-' + ch.id;
+
+      ch.meterCh.forEach(function(chIdx) {
+        const vu = document.createElement('div');
+        vu.className = 'meter-col-vu';
+        vu.id = 'drawer-vu-' + chIdx;
+        for (var s = 0; s < VU_SEGS_DRAWER; s++) {
+          const seg = document.createElement('div');
+          seg.className = 'vu-seg';
+          vu.appendChild(seg);
+        }
+        barsDiv.appendChild(vu);
+      });
+
+      col.appendChild(barsDiv);
+
+      const muteDot = document.createElement('div');
+      muteDot.className = 'meter-mute-dot';
+      muteDot.id = 'drawer-mute-' + ch.id;
+      col.appendChild(muteDot);
+
+      group.appendChild(col);
+    });
+
+    wrap.appendChild(group);
+    content.appendChild(wrap);
+  });
+}
+
+function updateDrawerVu(meterChIdx, valueLinear) {
+  const el = document.getElementById('drawer-vu-' + meterChIdx);
+  if (!el) return;
+  const db = valueLinear > 0 ? 20 * Math.log10(valueLinear) : -Infinity;
+  const segs = el.querySelectorAll('.vu-seg');
+  const n = segs.length;
+  segs.forEach(function(seg, i) {
+    const segDb = -60 + (i + 1) / n * 60;
+    if (db >= segDb) {
+      seg.style.background = db >= VU_CLIP_DB ? 'var(--vu-clip)' : db >= VU_MID_DB ? 'var(--vu-mid)' : 'var(--vu-low)';
+    } else {
+      seg.style.background = 'var(--vu-off)';
+    }
+  });
+}
+
+function updateDrawerMuteDots() {
+  DRAWER_CHANNELS.forEach(function(ch) {
+    const dot = document.getElementById('drawer-mute-' + ch.id);
+    if (!dot) return;
+    var muted = false;
+    if (ch.group === 'inputs')  muted = !!(chState[ch.stripId]  && chState[ch.stripId].mute);
+    if (ch.group === 'buses')   muted = !!(busState[ch.stripId] && busState[ch.stripId].mute);
+    if (ch.group === 'outputs') muted = !!(outState[ch.stripId] && outState[ch.stripId].mute);
+    dot.classList.toggle('muted', muted);
+  });
+}
+
+let vuAllPolling = false;
+
+function resumeVuAll() {
+  if (vuAllPolling) return;
+  vuAllPolling = true;
+  QRC.changeGroup.poll('vu_all', 40, function(changes) {
+    changes.forEach(function(c) {
+      const idx = parseInt(c.Name.split('.')[1]);
+      updateDrawerVu(idx, c.Value);
+    });
+    updateDrawerMuteDots();
+  });
+}
+
+function pauseVuAll() {
+  if (!vuAllPolling) return;
+  vuAllPolling = false;
+  QRC.changeGroup.stop('vu_all');
+}
+
+buildDrawerContent();
+
+function openProcessingSheet(cfg) {
+  window.procSheet = {
+    hpfComp:  cfg.hpfComp  || null,
+    lpfComp:  cfg.lpfComp  || null,
+    eqComp:   cfg.eqComp   || null,
+    compComp: cfg.compComp || null,
+    afcComp:  cfg.afcComp  || null,
+    gateComp: cfg.gateComp || null,
+  };
+  document.getElementById('proc-channel-name').textContent = cfg.name;
+  document.getElementById('proc-tab-comp').classList.toggle('proc-tab-hidden', !window.procSheet.compComp);
+  document.getElementById('proc-tab-afc').classList.toggle('proc-tab-hidden',  !window.procSheet.afcComp);
+  document.getElementById('proc-tab-gate').classList.toggle('proc-tab-hidden', !window.procSheet.gateComp);
+  switchProcTab('eq');
+  document.getElementById('processing-overlay').classList.add('active');
+  document.getElementById('processing-sheet').classList.add('active');
+  loadFiltersState();
+  loadEQState();
+  if (window.procSheet.compComp) loadCompState();
+  if (window.procSheet.afcComp)  loadAFCState();
+  if (window.procSheet.gateComp) loadGateState();
+}
+
+function closeProcessingSheet() {
+  document.getElementById('processing-overlay').classList.remove('active');
+  document.getElementById('processing-sheet').classList.remove('active');
+  window.procSheet = null;
+}
+
+function switchProcTab(tab) {
+  ['eq', 'comp', 'afc', 'gate'].forEach(t => {
+    document.getElementById('proc-tab-' + t).classList.remove('active');
+    document.getElementById('proc-content-' + t).classList.remove('active');
+  });
+  document.getElementById('proc-tab-' + tab).classList.add('active');
+  document.getElementById('proc-content-' + tab).classList.add('active');
+}
+
+document.getElementById('proc-tab-eq').addEventListener('click', () => {
+  switchProcTab('eq');
+  if (window.procSheet) { loadFiltersState(); loadEQState(); }
+});
+document.getElementById('proc-tab-comp').addEventListener('click', () => {
+  switchProcTab('comp'); if (window.procSheet) loadCompState();
+});
+document.getElementById('proc-tab-afc').addEventListener('click', () => {
+  switchProcTab('afc'); if (window.procSheet) loadAFCState();
+});
+document.getElementById('proc-tab-gate').addEventListener('click', () => {
+  switchProcTab('gate'); if (window.procSheet) loadGateState();
+});
+document.getElementById('proc-close-btn').addEventListener('click', closeProcessingSheet);
+document.getElementById('processing-overlay').addEventListener('click', closeProcessingSheet);
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && window.procSheet) closeProcessingSheet(); });
+
+// ── Filters (HPF / LPF) ───────────────────────────────────────────────────────
+function loadFiltersState() {
+  if (!window.procSheet) return;
+  QRC.component.get(window.procSheet.hpfComp, ['bypass', 'frequency'], function(controls) {
+    const bypass = (controls.find(c => c.Name === 'bypass') || {}).Value;
+    const freq   = (controls.find(c => c.Name === 'frequency') || {}).Value || 80;
+    setBypassBtn(document.getElementById('proc-hpf-bypass'), bypass == null ? 1 : bypass);
+    document.getElementById('proc-hpf-freq').value = freq;
+    document.getElementById('proc-hpf-freq-val').textContent = formatFreq(freq);
+    drawEQCurve();
+  });
+  QRC.component.get(window.procSheet.lpfComp, ['bypass', 'frequency'], function(controls) {
+    const bypass = (controls.find(c => c.Name === 'bypass') || {}).Value;
+    const freq   = (controls.find(c => c.Name === 'frequency') || {}).Value || 20000;
+    setBypassBtn(document.getElementById('proc-lpf-bypass'), bypass == null ? 1 : bypass);
+    document.getElementById('proc-lpf-freq').value = freq;
+    document.getElementById('proc-lpf-freq-val').textContent = formatFreq(freq);
+    drawEQCurve();
+  });
+}
+
+document.getElementById('proc-hpf-bypass').addEventListener('click', function() {
+  if (!window.procSheet) return;
+  var next = this.classList.contains('active') ? 1 : 0;
+  setBypassBtn(this, next);
+  QRC.component.set(window.procSheet.hpfComp, [{Name:'bypass', Value:next}]);
+  drawEQCurve();
+});
+document.getElementById('proc-hpf-freq').addEventListener('input', function() {
+  document.getElementById('proc-hpf-freq-val').textContent = formatFreq(this.value);
+  drawEQCurve();
+});
+document.getElementById('proc-hpf-freq').addEventListener('change', function() {
+  if (window.procSheet) QRC.component.set(window.procSheet.hpfComp, [{Name:'frequency', Value:parseFloat(this.value)}]);
+});
+
+document.getElementById('proc-lpf-bypass').addEventListener('click', function() {
+  if (!window.procSheet) return;
+  var next = this.classList.contains('active') ? 1 : 0;
+  setBypassBtn(this, next);
+  QRC.component.set(window.procSheet.lpfComp, [{Name:'bypass', Value:next}]);
+  drawEQCurve();
+});
+document.getElementById('proc-lpf-freq').addEventListener('input', function() {
+  document.getElementById('proc-lpf-freq-val').textContent = formatFreq(this.value);
+  drawEQCurve();
+});
+document.getElementById('proc-lpf-freq').addEventListener('change', function() {
+  if (window.procSheet) QRC.component.set(window.procSheet.lpfComp, [{Name:'frequency', Value:parseFloat(this.value)}]);
+});
+
+// ── EQ (4 bands) ─────────────────────────────────────────────────────────────
+function loadEQState() {
+  if (!window.procSheet) return;
+  var ctrls = [];
+  [1,2,3,4].forEach(function(n) {
+    ctrls.push('bypass.'+n, 'frequency.'+n, 'gain.'+n, 'bandwidth.'+n);
+  });
+  QRC.component.get(window.procSheet.eqComp, ctrls, function(res) {
+    var map = {};
+    res.forEach(function(c) { map[c.Name] = c.Value; });
+    [1,2,3,4].forEach(function(n) {
+      var bp   = map['bypass.'+n];
+      var freq = map['frequency.'+n] || [100,500,2000,8000][n-1];
+      var gain = map['gain.'+n] != null ? map['gain.'+n] : 0;
+      var bw   = map['bandwidth.'+n] || 1;
+      setBypassBtn(document.getElementById('proc-eq-bypass-'+n), bp == null ? 1 : bp);
+      document.getElementById('proc-eq-freq-'+n).value = freq;
+      document.getElementById('proc-eq-freq-val-'+n).textContent = formatFreq(freq);
+      document.getElementById('proc-eq-gain-'+n).value = gain;
+      document.getElementById('proc-eq-gain-val-'+n).textContent = formatGain(gain);
+      document.getElementById('proc-eq-bw-'+n).value = bw;
+      document.getElementById('proc-eq-bw-val-'+n).textContent = formatBW(bw);
+    });
+    drawEQCurve();
+  });
+}
+
+[1,2,3,4].forEach(function(n) {
+  document.getElementById('proc-eq-bypass-'+n).addEventListener('click', function() {
+    if (!window.procSheet) return;
+    var nowActive = this.classList.toggle('active');
+    this.textContent = nowActive ? 'ON' : 'OFF';
+    QRC.component.set(window.procSheet.eqComp, [{Name:'bypass.'+n, Value: nowActive ? 0 : 1}]);
+    drawEQCurve();
+  });
+  document.getElementById('proc-eq-freq-'+n).addEventListener('input', function() {
+    document.getElementById('proc-eq-freq-val-'+n).textContent = formatFreq(this.value);
+    drawEQCurve();
+  });
+  document.getElementById('proc-eq-freq-'+n).addEventListener('change', function() {
+    if (window.procSheet) QRC.component.set(window.procSheet.eqComp, [{Name:'frequency.'+n, Value:parseFloat(this.value)}]);
+  });
+  document.getElementById('proc-eq-gain-'+n).addEventListener('input', function() {
+    document.getElementById('proc-eq-gain-val-'+n).textContent = formatGain(this.value);
+    drawEQCurve();
+  });
+  document.getElementById('proc-eq-gain-'+n).addEventListener('change', function() {
+    if (window.procSheet) QRC.component.set(window.procSheet.eqComp, [{Name:'gain.'+n, Value:parseFloat(this.value)}]);
+  });
+  document.getElementById('proc-eq-bw-'+n).addEventListener('input', function() {
+    document.getElementById('proc-eq-bw-val-'+n).textContent = formatBW(this.value);
+    drawEQCurve();
+  });
+  document.getElementById('proc-eq-bw-'+n).addEventListener('change', function() {
+    if (window.procSheet) QRC.component.set(window.procSheet.eqComp, [{Name:'bandwidth.'+n, Value:parseFloat(this.value)}]);
+  });
+});
+
+// ── AFC (Notch Feedback Controller) ──────────────────────────────────────────
+var AFC_BW_LABELS = ['1/5', '1/10', '1/20', '1/40'];
+var AFC_BW_VALUES = [0.2, 0.1, 0.05, 0.025];
+
+function afcBwIndex(val) {
+  var best = 0, bestDist = Infinity;
+  AFC_BW_VALUES.forEach(function(v, i) { var d = Math.abs(v - val); if (d < bestDist) { bestDist = d; best = i; } });
+  return best;
+}
+
+function loadAFCState() {
+  if (!window.procSheet || !window.procSheet.afcComp) return;
+  QRC.component.get(window.procSheet.afcComp,
+    ['bypass','mute','gain','feedback.threshold','notch.bandwidth',
+     'min.dynamic.frequency','max.dynamic.frequency','reclaim.time'],
+    function(controls) {
+      var m = {};
+      controls.forEach(function(c) { m[c.Name] = c.Value; });
+      setBypassBtn(document.getElementById('proc-afc-bypass'), m['bypass'] != null ? m['bypass'] : 1);
+      var muteOn = m['mute'] === 1;
+      document.getElementById('proc-afc-mute').classList.toggle('active', muteOn);
+      document.getElementById('proc-afc-mute').textContent = muteOn ? 'Muted' : 'Mute';
+      var gain    = m['gain']                   != null ? m['gain']                   : 0;
+      var thresh  = m['feedback.threshold']     != null ? m['feedback.threshold']     : -40;
+      var bwVal   = m['notch.bandwidth']        != null ? m['notch.bandwidth']        : 0.05;
+      var minFreq = m['min.dynamic.frequency']  != null ? m['min.dynamic.frequency']  : 1000;
+      var maxFreq = m['max.dynamic.frequency']  != null ? m['max.dynamic.frequency']  : 1000;
+      var reclaim = m['reclaim.time']           != null ? m['reclaim.time']           : 30;
+      document.getElementById('proc-afc-gain').value = gain;
+      document.getElementById('proc-afc-gain-val').textContent = formatGain(gain);
+      document.getElementById('proc-afc-threshold').value = thresh;
+      document.getElementById('proc-afc-threshold-val').textContent = thresh.toFixed(1) + ' dB';
+      var bwIdx = afcBwIndex(bwVal);
+      document.getElementById('proc-afc-bandwidth').value = bwIdx;
+      document.getElementById('proc-afc-bandwidth-val').textContent = AFC_BW_LABELS[bwIdx];
+      document.getElementById('proc-afc-minfreq').value = minFreq;
+      document.getElementById('proc-afc-minfreq-val').textContent = formatFreq(minFreq);
+      document.getElementById('proc-afc-maxfreq').value = maxFreq;
+      document.getElementById('proc-afc-maxfreq-val').textContent = formatFreq(maxFreq);
+      document.getElementById('proc-afc-reclaim').value = reclaim;
+      document.getElementById('proc-afc-reclaim-val').textContent = reclaim.toFixed(1) + ' s';
+    }
+  );
+}
+
+document.getElementById('proc-afc-bypass').addEventListener('click', function() {
+  if (!window.procSheet || !window.procSheet.afcComp) return;
+  var next = this.classList.contains('active') ? 1 : 0;
+  setBypassBtn(this, next);
+  QRC.component.set(window.procSheet.afcComp, [{Name:'bypass', Value:next}]);
+});
+document.getElementById('proc-afc-mute').addEventListener('click', function() {
+  if (!window.procSheet || !window.procSheet.afcComp) return;
+  var nowMuted = this.classList.toggle('active');
+  this.textContent = nowMuted ? 'Muted' : 'Mute';
+  QRC.component.set(window.procSheet.afcComp, [{Name:'mute', Value: nowMuted ? 1 : 0}]);
+});
+document.getElementById('proc-afc-clear-all').addEventListener('click', function() {
+  if (window.procSheet && window.procSheet.afcComp)
+    QRC.component.set(window.procSheet.afcComp, [{Name:'clear.all', Value:1}]);
+});
+document.getElementById('proc-afc-clear-dynamic').addEventListener('click', function() {
+  if (window.procSheet && window.procSheet.afcComp)
+    QRC.component.set(window.procSheet.afcComp, [{Name:'clear.dynamic', Value:1}]);
+});
+
+[
+  ['proc-afc-gain',      'proc-afc-gain-val',      'gain',                  formatGain],
+  ['proc-afc-threshold', 'proc-afc-threshold-val', 'feedback.threshold',    function(v){ return parseFloat(v).toFixed(1)+' dB'; }],
+  ['proc-afc-minfreq',   'proc-afc-minfreq-val',   'min.dynamic.frequency', formatFreq],
+  ['proc-afc-maxfreq',   'proc-afc-maxfreq-val',   'max.dynamic.frequency', formatFreq],
+  ['proc-afc-reclaim',   'proc-afc-reclaim-val',   'reclaim.time',          function(v){ return parseFloat(v).toFixed(1)+' s'; }],
+].forEach(function(row) {
+  var sliderId = row[0], valId = row[1], ctrlName = row[2], fmt = row[3];
+  document.getElementById(sliderId).addEventListener('input', function() {
+    document.getElementById(valId).textContent = fmt(this.value);
+  });
+  document.getElementById(sliderId).addEventListener('change', function() {
+    if (window.procSheet && window.procSheet.afcComp)
+      QRC.component.set(window.procSheet.afcComp, [{Name:ctrlName, Value:parseFloat(this.value)}]);
+  });
+});
+// Bandwidth is a stepped selector mapped to discrete values
+document.getElementById('proc-afc-bandwidth').addEventListener('input', function() {
+  document.getElementById('proc-afc-bandwidth-val').textContent = AFC_BW_LABELS[parseInt(this.value)] || '';
+});
+document.getElementById('proc-afc-bandwidth').addEventListener('change', function() {
+  if (window.procSheet && window.procSheet.afcComp)
+    QRC.component.set(window.procSheet.afcComp, [{Name:'notch.bandwidth', Value:AFC_BW_VALUES[parseInt(this.value)]}]);
+});
+
+// ── Gate ──────────────────────────────────────────────────────────────────────
+function loadGateState() {
+  if (!window.procSheet || !window.procSheet.gateComp) return;
+  QRC.component.get(window.procSheet.gateComp,
+    ['bypass','threshold','attack.time','hold.time','release.time','range'],
+    function(controls) {
+      var m = {};
+      controls.forEach(function(c) { m[c.Name] = c.Value; });
+      setBypassBtn(document.getElementById('proc-gate-bypass'), m['bypass'] != null ? m['bypass'] : 1);
+      var thresh  = m['threshold']   != null ? m['threshold']   : -40;
+      var attack  = m['attack.time'] != null ? m['attack.time'] : 5;
+      var hold    = m['hold.time']   != null ? m['hold.time']   : 100;
+      var release = m['release.time']!= null ? m['release.time']: 300;
+      var range   = m['range']       != null ? m['range']       : -80;
+      document.getElementById('proc-gate-threshold').value = thresh;  document.getElementById('proc-gate-threshold-val').textContent = thresh.toFixed(1) + ' dB';
+      document.getElementById('proc-gate-attack').value    = attack;  document.getElementById('proc-gate-attack-val').textContent    = formatMs(attack);
+      document.getElementById('proc-gate-hold').value      = hold;    document.getElementById('proc-gate-hold-val').textContent      = formatMs(hold);
+      document.getElementById('proc-gate-release').value   = release; document.getElementById('proc-gate-release-val').textContent   = formatMs(release);
+      document.getElementById('proc-gate-range').value     = range;   document.getElementById('proc-gate-range-val').textContent     = range.toFixed(1) + ' dB';
+    }
+  );
+}
+
+document.getElementById('proc-gate-bypass').addEventListener('click', function() {
+  if (!window.procSheet || !window.procSheet.gateComp) return;
+  var next = this.classList.contains('active') ? 1 : 0;
+  setBypassBtn(this, next);
+  QRC.component.set(window.procSheet.gateComp, [{Name:'bypass', Value:next}]);
+});
+
+[
+  ['proc-gate-threshold', 'proc-gate-threshold-val', 'threshold',   function(v){ return parseFloat(v).toFixed(1)+' dB'; }],
+  ['proc-gate-attack',    'proc-gate-attack-val',    'attack.time', formatMs],
+  ['proc-gate-hold',      'proc-gate-hold-val',      'hold.time',   formatMs],
+  ['proc-gate-release',   'proc-gate-release-val',   'release.time',formatMs],
+  ['proc-gate-range',     'proc-gate-range-val',     'range',       function(v){ return parseFloat(v).toFixed(1)+' dB'; }],
+].forEach(function(row) {
+  var sliderId = row[0], valId = row[1], ctrlName = row[2], fmt = row[3];
+  document.getElementById(sliderId).addEventListener('input', function() {
+    document.getElementById(valId).textContent = fmt(this.value);
+  });
+  document.getElementById(sliderId).addEventListener('change', function() {
+    if (window.procSheet && window.procSheet.gateComp)
+      QRC.component.set(window.procSheet.gateComp, [{Name:ctrlName, Value:parseFloat(this.value)}]);
+  });
+});
+
+// ── Compressor ────────────────────────────────────────────────────────────────
+function loadCompState() {
+  if (!window.procSheet || !window.procSheet.compComp) return;
+  QRC.component.get(window.procSheet.compComp,
+    ['threshold','ratio','attack.time','release.time','output.gain','bypass'],
+    function(controls) {
+      var m = {};
+      controls.forEach(function(c) { m[c.Name] = c.Value; });
+      var thresh  = m['threshold']    != null ? m['threshold']    : -18;
+      var ratio   = m['ratio']        != null ? m['ratio']        : 4;
+      var attack  = m['attack.time']  != null ? m['attack.time']  : 10;
+      var release = m['release.time'] != null ? m['release.time'] : 100;
+      var makeup  = m['output.gain']  != null ? m['output.gain']  : 0;
+      var bypass  = m['bypass']       != null ? m['bypass']       : 1;
+      document.getElementById('proc-comp-threshold').value = thresh;
+      document.getElementById('proc-comp-threshold-val').textContent = thresh.toFixed(1) + ' dB';
+      document.getElementById('proc-comp-ratio').value = ratio;
+      document.getElementById('proc-comp-ratio-val').textContent = formatRatio(ratio);
+      document.getElementById('proc-comp-attack').value = attack;
+      document.getElementById('proc-comp-attack-val').textContent = formatMs(attack);
+      document.getElementById('proc-comp-release').value = release;
+      document.getElementById('proc-comp-release-val').textContent = formatMs(release);
+      document.getElementById('proc-comp-makeup').value = makeup;
+      document.getElementById('proc-comp-makeup-val').textContent = formatGain(makeup);
+      setBypassBtn(document.getElementById('proc-comp-bypass'), bypass);
+    }
+  );
+}
+
+document.getElementById('proc-comp-bypass').addEventListener('click', function() {
+  if (!window.procSheet || !window.procSheet.compComp) return;
+  var next = this.classList.contains('active') ? 1 : 0;
+  setBypassBtn(this, next);
+  QRC.component.set(window.procSheet.compComp, [{Name:'bypass', Value:next}]);
+});
+
+[
+  ['proc-comp-threshold', 'proc-comp-threshold-val', 'threshold',    function(v){ return parseFloat(v).toFixed(1)+' dB'; }],
+  ['proc-comp-ratio',     'proc-comp-ratio-val',     'ratio',        formatRatio],
+  ['proc-comp-attack',    'proc-comp-attack-val',    'attack.time',  formatMs],
+  ['proc-comp-release',   'proc-comp-release-val',   'release.time', formatMs],
+  ['proc-comp-makeup',    'proc-comp-makeup-val',    'output.gain',  formatGain],
+].forEach(function(row) {
+  var sliderId = row[0], valId = row[1], ctrlName = row[2], fmt = row[3];
+  document.getElementById(sliderId).addEventListener('input', function() {
+    document.getElementById(valId).textContent = fmt(this.value);
+  });
+  document.getElementById(sliderId).addEventListener('change', function() {
+    if (window.procSheet && window.procSheet.compComp)
+      QRC.component.set(window.procSheet.compComp, [{Name:ctrlName, Value:parseFloat(this.value)}]);
+  });
+});
+</script>
+</body>
+</html>

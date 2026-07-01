@@ -9,6 +9,7 @@ import { app, Tray, Menu, nativeImage, shell } from 'electron'
 import path from 'node:path'
 import { loadConfig, getConfigPath, findConfigPath, seedUserConfig } from './config.js'
 import { Bridge } from './bridge.js'
+import { UciServer } from './uci-server.js'
 import { Configurator } from './configurator.js'
 
 // No Dock icon on macOS
@@ -55,6 +56,23 @@ app.whenReady().then(async () => {
   }
 
   const bridge = config ? new Bridge(config) : null
+
+  // UCI web server — serves foh-uci.html and relays browser WS traffic to the
+  // Core over its own TCP sockets (independent of the MIDI bridge connection).
+  let uciServer: UciServer | null = null
+  if (config) {
+    const uciEnabled = config.uci?.enabled ?? true
+    if (uciEnabled) {
+      const uciPort = config.uci?.port ?? 3001
+      uciServer = new UciServer()
+      uciServer.on('error', (err: Error) => {
+        console.error(`[UCI] Server error: ${err.message}`)
+      })
+      // Bind 0.0.0.0 so LAN devices (iPad) can reach it; relay target is the
+      // same Core the MIDI bridge talks to.
+      uciServer.start('0.0.0.0', uciPort, config.qsys.host, config.qsys.port)
+    }
+  }
 
   // Configurator window (lazily opened from tray menu)
   const configurator = new Configurator(
@@ -151,6 +169,7 @@ app.whenReady().then(async () => {
   }
 
   app.on('before-quit', async () => {
+    uciServer?.stop()
     await bridge?.stop()
   })
 })
