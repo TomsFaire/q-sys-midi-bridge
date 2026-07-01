@@ -287,12 +287,30 @@ The SOLO button (note ch1/27) is designed as a modifier: hold SOLO and press a m
 
 ---
 
+## UCI / FOH mixer
+
+The app also serves the FOH mixer web UI and relays browser WebSocket traffic to the Core, so an iPad (or any device) on the same WiFi as this Mac can control the mixer from a browser — no separate server or app needed.
+
+**Access it at:**
+
+- `http://localhost:<port>/foh-uci` on this Mac
+- The LAN URL shown in **Tray → UCI** — also copyable via **Tray → Copy UCI Link**
+- The Configurator's **Network** panel (**Configure Mappings… → Network — UCI Web Server**), which shows both the local and LAN URLs with their own Copy buttons
+
+**Config:** controlled by the `uci.enabled` and `uci.port` keys in `config.json` (see `src/main/config.ts`) — `enabled` defaults to `true`, `port` defaults to `3001`. As with other config changes, restart the app to apply changes to these keys.
+
+**Network caveat:** this works over the same WiFi network only. If the venue network has AP/client isolation enabled, devices on the same SSID can't reach each other — that's a network configuration issue, not an app bug.
+
+---
+
 ## Tray menu
 
 Click the menu bar icon to see:
 
 - **Q-Sys connection status** and Core IP
 - **MIDI device status** and port name
+- **UCI status line** — shows the LAN URL and connected client count when enabled, or an error if the UCI server failed to start
+- **Copy UCI Link** — copies the LAN UCI URL to the clipboard
 - **Recent activity log** (last 5 actions)
 - **Open Config File** — opens the active config in your default editor
 - **Quit**

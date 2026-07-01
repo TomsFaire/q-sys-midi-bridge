@@ -92,11 +92,16 @@ app.whenReady().then(async () => {
 
     const lanIp = getLanIPv4()
     const uciUrl = uciEnabled && lanIp ? `http://${lanIp}:${uciPort}/foh-uci` : null
+    const uciError = uciServer?.lastError ?? null
+    const uciClients = uciServer?.clientCount ?? 0
+    const uciClientSuffix = uciClients > 0 ? ` (${uciClients} client${uciClients === 1 ? '' : 's'})` : ''
     const uciLabel = !uciEnabled
       ? 'UCI:    ○ Disabled'
-      : uciUrl
-        ? `UCI:    ● ${uciUrl}`
-        : 'UCI:    ○ No network'
+      : uciError
+        ? `UCI:    ✕ Error: ${uciError}`
+        : uciUrl
+          ? `UCI:    ● ${uciUrl}${uciClientSuffix}`
+          : 'UCI:    ○ No network'
 
     const items: Electron.MenuItemConstructorOptions[] = [
       {
@@ -169,6 +174,12 @@ app.whenReady().then(async () => {
 
   // Rebuild whenever bridge status changes
   bridge?.on('status-change', refreshTray)
+
+  // Rebuild whenever the UCI server's connection/error state changes
+  uciServer?.on('listening', refreshTray)
+  uciServer?.on('error', refreshTray)
+  uciServer?.on('client-connected', refreshTray)
+  uciServer?.on('client-disconnected', refreshTray)
 
   // Also refresh on a timer in case the tray menu is already open
   setInterval(refreshTray, 3000)

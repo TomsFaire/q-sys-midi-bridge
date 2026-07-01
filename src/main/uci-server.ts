@@ -27,6 +27,8 @@ export class UciServer extends EventEmitter {
   private wss: WebSocketServer | null = null
   // Track open relay pairs so stop() can tear them all down.
   private relays = new Set<{ ws: WebSocket; tcp: Socket }>()
+  private listening = false
+  private _lastError: string | null = null
 
   /**
    * Start the UCI HTTP + WebSocket relay server.
@@ -61,6 +63,7 @@ export class UciServer extends EventEmitter {
     })
 
     server.on('error', (err) => {
+      this._lastError = err.message
       this.emit('error', err)
     })
 
@@ -116,6 +119,8 @@ export class UciServer extends EventEmitter {
 
     server.listen(port, host, () => {
       console.log(`[UCI] listening on http://${host}:${port} (relay → ${coreHost}:${corePort})`)
+      this.listening = true
+      this._lastError = null
       this.emit('listening', { host, port })
     })
 
@@ -139,5 +144,15 @@ export class UciServer extends EventEmitter {
 
     this.server?.close()
     this.server = null
+    this.listening = false
   }
+
+  /** Number of currently open browser↔Core relay connections. */
+  get clientCount(): number { return this.relays.size }
+
+  /** True once `start()`'s `server.listen` callback has fired, false after `stop()`/before `start()`. */
+  get isListening(): boolean { return this.listening }
+
+  /** Last error message emitted via the `error` event, cleared on a successful `start()`. */
+  get lastError(): string | null { return this._lastError }
 }
