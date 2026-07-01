@@ -8,17 +8,20 @@
     "build": "tsc",
     "watch": "tsc --watch",
     "rebuild-midi": "electron-rebuild -f -w @julusian/midi",
+    "sync-uci": "node -e \"const fs=require('fs'),p=require('path');const root=process.cwd();const src=process.env.FOH_UCI_SRC||p.join(root,'../../Q-SYS/General/foh-uci.html');const dest=p.join(root,'assets/uci/foh-uci.html');fs.mkdirSync(p.dirname(dest),{recursive:true});fs.copyFileSync(src,dest);console.log('Synced UCI from '+src+' -> '+dest)\"",
     "package": "npm run build && electron-builder --mac --publish never"
   },
   "devDependencies": {
     "@electron/rebuild": "^3",
     "@types/node": "^20",
+    "@types/ws": "^8.18.1",
     "electron": "^33",
     "electron-builder": "^24",
     "typescript": "^5"
   },
   "dependencies": {
-    "@julusian/midi": "^3"
+    "@julusian/midi": "^3",
+    "ws": "^8.20.0"
   },
   "build": {
     "appId": "com.tomsfaire.midi-qsys-bridge",

@@ -5,11 +5,13 @@
  * Config is loaded once at startup; restart app to reload config changes.
  */
 
-import { app, Tray, Menu, nativeImage, shell } from 'electron'
+import { app, Tray, Menu, nativeImage, shell, clipboard } from 'electron'
 import path from 'node:path'
 import { loadConfig, getConfigPath, findConfigPath, seedUserConfig } from './config.js'
 import { Bridge } from './bridge.js'
+import { UciServer } from './uci-server.js'
 import { Configurator } from './configurator.js'
+import { getLanIPv4 } from './network.js'
 
 // No Dock icon on macOS
 app.dock?.hide()
@@ -56,12 +58,28 @@ app.whenReady().then(async () => {
 
   const bridge = config ? new Bridge(config) : null
 
+  // UCI web server — serves foh-uci.html and relays browser WS traffic to the
+  // Core over its own TCP sockets (independent of the MIDI bridge connection).
+  const uciEnabled = config?.uci?.enabled ?? true
+  const uciPort = config?.uci?.port ?? 3001
+  let uciServer: UciServer | null = null
+  if (config && uciEnabled) {
+    uciServer = new UciServer()
+    uciServer.on('error', (err: Error) => {
+      console.error(`[UCI] Server error: ${err.message}`)
+    })
+    // Bind 0.0.0.0 so LAN devices (iPad) can reach it; relay target is the
+    // same Core the MIDI bridge talks to.
+    uciServer.start('0.0.0.0', uciPort, config.qsys.host, config.qsys.port)
+  }
+
   // Configurator window (lazily opened from tray menu)
   const configurator = new Configurator(
     config?.qsys.host ?? '10.4.84.20',
     config?.qsys.port ?? 1710,
     findConfigPath(),
     bridge ? async () => { await bridge.reloadConfig() } : undefined,
+    uciPort,
   )
 
   // Build the tray icon
@@ -72,6 +90,19 @@ app.whenReady().then(async () => {
     const qrcOk = bridge?.qrcConnected ?? false
     const midiOk = bridge?.midiConnected ?? false
 
+    const lanIp = getLanIPv4()
+    const uciUrl = uciEnabled && lanIp ? `http://${lanIp}:${uciPort}/foh-uci` : null
+    const uciError = uciServer?.lastError ?? null
+    const uciClients = uciServer?.clientCount ?? 0
+    const uciClientSuffix = uciClients > 0 ? ` (${uciClients} client${uciClients === 1 ? '' : 's'})` : ''
+    const uciLabel = !uciEnabled
+      ? 'UCI:    ○ Disabled'
+      : uciError
+        ? `UCI:    ✕ Error: ${uciError}`
+        : uciUrl
+          ? `UCI:    ● ${uciUrl}${uciClientSuffix}`
+          : 'UCI:    ○ No network'
+
     const items: Electron.MenuItemConstructorOptions[] = [
       {
         label: `Q-Sys:  ${qrcOk ? `● Connected (${bridge!.qsysHost})` : '○ Disconnected'}`,
@@ -80,6 +111,17 @@ app.whenReady().then(async () => {
       {
         label: `MIDI:   ${midiOk ? `● ${bridge!.midiDeviceName}` : '○ Not found'}`,
         enabled: false,
+      },
+      {
+        label: uciLabel,
+        enabled: false,
+      },
+      {
+        label: 'Copy UCI Link',
+        enabled: !!uciUrl,
+        click: () => {
+          if (uciUrl) clipboard.writeText(uciUrl)
+        },
       },
       { type: 'separator' },
     ]
@@ -133,6 +175,12 @@ app.whenReady().then(async () => {
   // Rebuild whenever bridge status changes
   bridge?.on('status-change', refreshTray)
 
+  // Rebuild whenever the UCI server's connection/error state changes
+  uciServer?.on('listening', refreshTray)
+  uciServer?.on('error', refreshTray)
+  uciServer?.on('client-connected', refreshTray)
+  uciServer?.on('client-disconnected', refreshTray)
+
   // Also refresh on a timer in case the tray menu is already open
   setInterval(refreshTray, 3000)
 
@@ -151,6 +199,7 @@ app.whenReady().then(async () => {
   }
 
   app.on('before-quit', async () => {
+    uciServer?.stop()
     await bridge?.stop()
   })
 })

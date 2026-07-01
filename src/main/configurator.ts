@@ -11,6 +11,7 @@ import path from 'node:path'
 import fs from 'node:fs'
 import { QrcClient } from './qrc-client.js'
 import { stripComments } from './config.js'
+import { getLanIPv4 } from './network.js'
 
 // ── Physical controls ─────────────────────────────────────────────────────────
 // Hardcoded from the midi-learn session. All 51 controls, in layout order.
@@ -102,6 +103,9 @@ export class Configurator {
     private readonly port: number,
     private readonly configFilePath: string,
     private readonly onReload?: () => Promise<void>,
+    // Configured UCI web server port — used as the fallback when config.uci
+    // hasn't been written to the file yet (e.g. no config.json present).
+    private readonly uciPort: number = 3001,
   ) {
     this.registerIpc()
   }
@@ -141,6 +145,16 @@ export class Configurator {
   private parseConfig(raw: string): Record<string, unknown> {
     const clean = stripComments(raw)
     return JSON.parse(clean) as Record<string, unknown>
+  }
+
+  private readUciConfig(): { enabled?: boolean; port?: number } {
+    try {
+      const raw = fs.readFileSync(this.configFilePath, 'utf-8')
+      const config = this.parseConfig(raw)
+      return (config.uci as { enabled?: boolean; port?: number } | undefined) ?? {}
+    } catch {
+      return {}
+    }
   }
 
   private registerIpc(): void {
@@ -212,6 +226,29 @@ export class Configurator {
       if (this.onReload) {
         await this.onReload()
       }
+    })
+
+    // ── Network info (UCI web server LAN URL) ───────────────────────────────
+    ipcMain.handle('cfg:get-network-info', () => {
+      const uci = this.readUciConfig()
+      const port = uci.port ?? this.uciPort
+      const lanIp = getLanIPv4()
+      return {
+        localUrl: `http://localhost:${port}/foh-uci`,
+        lanUrl: lanIp ? `http://${lanIp}:${port}/foh-uci` : null,
+        uciEnabled: uci.enabled ?? true,
+        uciPort: port,
+      }
+    })
+
+    // ── Enable/disable the UCI web server (restart required to apply) ──────
+    ipcMain.handle('cfg:set-uci-enabled', (_event, enabled: boolean) => {
+      const raw = fs.readFileSync(this.configFilePath, 'utf-8')
+      const config = this.parseConfig(raw)
+      const uci = (config.uci as Record<string, unknown> | undefined) ?? {}
+      uci.enabled = enabled
+      config.uci = uci
+      fs.writeFileSync(this.configFilePath, JSON.stringify(config, null, 2), 'utf-8')
     })
   }
 }

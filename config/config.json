@@ -3,6 +3,12 @@
     "host": "10.4.84.20",
     "port": 1710
   },
+  // UCI web server: serves foh-uci.html and relays browser WebSocket → Core.
+  // Defaults when absent: enabled: true, port: 3001.
+  "uci": {
+    "enabled": true,
+    "port": 3001
+  },
   "midi": {
     "deviceName": "MIDI Mix"
   },
