@@ -1,5 +1,7 @@
 # MIDI Q-Sys Bridge
 
+![Configure Mappings UI](docs/configurator.png)
+
 macOS menu-bar app that maps an **Akai MIDImix** to Q-Sys controls over QRC (TCP port 1710). Runs headlessly in the system tray with no window. Bidirectional: mute button LEDs stay in sync with Q-Sys state.
 
 > **Primary hardware:** Akai MIDImix (USB class-compliant, 8 channels × 3 knob rows + faders + mute/rec-arm buttons). See [Adapting to other controllers](#adapting-to-other-controllers) if you want to use a different device.
