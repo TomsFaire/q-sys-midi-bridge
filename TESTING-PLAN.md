@@ -197,6 +197,129 @@ After rebuild, push to Core and verify by looking for the new components in Q-SY
 
 ---
 
+## Part 5 — UCI over LAN
+
+Covers the browser-based FOH mixer UI (`UciServer` in `src/main/uci-server.ts`)
+added alongside the MIDI bridge: serving `/foh-uci` and relaying browser
+WebSocket traffic to the Core over `/qrc`. Run these after Parts 1–2 pass
+(app launched, Q-Sys + MIDI both connected).
+
+### Test 8 — Local UCI verification
+
+**What:** Confirms the UCI HTTP server is up, serves the mixer page, and
+relays live QRC traffic when opened from this Mac.
+
+**How to test:**
+1. Launch the app (`npm start`, or `npx electron .` from a built `dist/`).
+2. Check the tray menu: it should show a `UCI:  ● http://<lan-ip>:<port>/foh-uci`
+   line (default port `3001`; `<lan-ip>` comes from `getLanIPv4()` in
+   `src/main/network.ts` — it prefers `en0`, so on multi-homed Macs this may
+   not be the interface you expect for a given VLAN — see Test 9's
+   troubleshooting note).
+3. Open that URL in a browser **on this same Mac** (e.g. `open
+   http://localhost:<port>/foh-uci`, or `curl` it to confirm a `200` and a
+   full HTML payload).
+4. Confirm the page establishes a live WebSocket to `/qrc` and shows real
+   Core state (channel names/levels populate, not stuck on "connecting").
+
+**Pass:** Page returns HTTP 200 with the mixer HTML; the WebSocket connects
+and reflects live Core state; tray's `UCI:` line matches (URL shown, no
+`✕ Error:`).
+
+**Note:** This is same-machine verification only — it proves the HTTP/WS
+server and Core relay work from this Mac's own network stack. It does **not**
+prove a separate device on the venue WiFi can reach it (see Test 10 —
+manual-only).
+
+### Test 9 — Concurrency check
+
+**What:** Confirms the `/qrc` relay handles 2–3 simultaneous browser-style
+WebSocket clients without serializing or dropping them, and that the MIDI
+bridge's own Core connection is unaffected while they're open.
+
+**How to test:**
+1. With the app running and connected, open 2–3 concurrent WebSocket
+   connections to `ws://localhost:<port>/qrc` (a small Node script using the
+   `ws` package — already a dependency — works; see
+   `qrc-ws-concurrency-test.mjs` at the repo root for a ready-made one:
+   `node qrc-ws-concurrency-test.mjs ws://localhost:3001/qrc 3`).
+2. From each connection, send a JSON-RPC request such as `EngineStatus` or
+   `NoOp` (no trailing `\0` needed — the client script appends it) and
+   confirm each connection gets back its own valid JSON-RPC response.
+3. While those connections are open, check the tray menu — the `UCI:` line
+   should show a `(N clients)` suffix matching the number of open
+   connections, and the `Q-Sys:`/`MIDI:` lines should be unaffected
+   (bridge keeps working normally; trigger a real MIDI control move or a
+   `qrc-test.mjs` readback if you want to confirm the bridge's own Core
+   connection is still live).
+4. Close the extra connections and confirm the tray's client count drops
+   back to 0 and the app doesn't log any errors/crashes.
+
+**Pass:** All 2–3 connections get valid, independent responses; the tray
+client-count suffix tracks connections opening/closing; the MIDI bridge's
+own connection and status are unaffected throughout.
+
+**Troubleshooting:** If a connection just hangs with no response, check
+that the Core at the configured host/port is actually reachable
+(`nc -zv <host> 1710`) — the relay opens a fresh TCP socket to the Core per
+browser client, so a Core that's unreachable/rebooting will strand *all*
+open relay connections, not just the MIDI bridge's.
+
+### Test 10 — Manual-only: physical + real-device tests
+
+**These three cannot be automated or faked from this Mac — they need a
+human with hands on the hardware and/or a second device on the venue WiFi.**
+Budget under 5 minutes total once on site with the gear.
+
+**(a) Physical fader test**
+1. With the app running and MIDImix connected, open the running design in
+   Q-Sys Designer and double-click `Input.Mixer` (or whichever component a
+   fader is mapped to) to show its live controls.
+2. Move one physical MIDImix fader.
+3. Confirm the paired QRC control updates in Designer in real time.
+
+This is the authoritative regression test for the MIDI→QRC path — it is
+the only test that actually exercises the physical controller. Test 2 in
+this document (QRC-readback via `qrc-test.mjs`) is **not** a substitute: it
+only confirms the Core's own control state is readable/writable via QRC
+independent of MIDI, it does not prove a fader move reaches the Core.
+
+**(b) Tablet-on-LAN test**
+1. Get the LAN URL from **Tray → UCI** (or "Copy UCI Link").
+2. On a phone or tablet connected to the **same WiFi network** as this Mac
+   (not a different VLAN/guest network), open that URL in a browser.
+3. Confirm the mixer page loads and a control move from the tablet updates
+   the Core (visible in Designer, or by another fader move showing up on a
+   second client).
+
+**If it fails, check (in order):**
+- **AP/client isolation** — many venue/guest WiFi networks block
+  device-to-device traffic even on the same SSID. This needs a different
+  network configuration (a non-isolated SSID/VLAN, or a wired/AP-bridged
+  segment) — it is not something a code change can fix.
+- **macOS firewall prompt** — on first launch, macOS may ask "Allow incoming
+  connections?" for the app; it must be accepted, or the HTTP/WS server
+  will be unreachable from other devices even though it works via
+  `localhost`.
+- **iOS Local Network permission** — on iPhone/iPad, check
+  **Settings → Safari → Local Network** (or the per-site prompt) is allowed;
+  iOS blocks LAN requests from Safari/web views without this.
+- Confirm the tablet is actually on the interface/subnet
+  `getLanIPv4()` picked (see Test 8, step 2) — on a multi-homed Mac the
+  advertised IP may be on a different interface/VLAN than the one the
+  tablet's WiFi is bridged to, in which case the URL is simply
+  unreachable from that device by design.
+
+**(c) Combined test (manual-only, do alongside (a))**
+1. With a tablet's UCI session open on one control and the MIDImix on the
+   physical control for the same channel, move the physical fader and the
+   on-screen fader in quick succession (or have two people do it at once).
+2. Confirm both converge on the same Core state (last write wins, as
+   expected for two independent Core connections) and neither path
+   crashes, freezes, or desyncs from the Core's actual value.
+
+---
+
 ## Troubleshooting
 
 **Q-SYS shows "disconnected"**
