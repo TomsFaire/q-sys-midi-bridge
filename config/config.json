@@ -484,70 +484,17 @@
   "feedback": {
     "enabled": true,
     "mute_leds": [
-      {
-        "component": "Input.Mixer",
-        "control": "input.1.mute",
-        "midi": {
-          "channel": 1,
-          "note": 1
-        }
-      },
-      {
-        "component": "Input.Mixer",
-        "control": "input.2.mute",
-        "midi": {
-          "channel": 1,
-          "note": 4
-        }
-      },
-      {
-        "component": "Input.Mixer",
-        "control": "input.3.mute",
-        "midi": {
-          "channel": 1,
-          "note": 7
-        }
-      },
-      {
-        "component": "Input.Mixer",
-        "control": "input.4.mute",
-        "midi": {
-          "channel": 1,
-          "note": 10
-        }
-      },
-      {
-        "component": "Input.Mixer",
-        "control": "input.5.mute",
-        "midi": {
-          "channel": 1,
-          "note": 13
-        }
-      },
-      {
-        "component": "Input.Mixer",
-        "control": "input.6.mute",
-        "midi": {
-          "channel": 1,
-          "note": 16
-        }
-      },
-      {
-        "component": "Input.Mixer",
-        "control": "input.7.mute",
-        "midi": {
-          "channel": 1,
-          "note": 19
-        }
-      },
-      {
-        "component": "Input.Mixer",
-        "control": "input.8.mute",
-        "midi": {
-          "channel": 1,
-          "note": 22
-        }
-      }
+      { "component": "Mic.01.Gain", "control": "mute", "midi": { "channel": 1, "note": 1  } },
+      { "component": "Mic.02.Gain", "control": "mute", "midi": { "channel": 1, "note": 4  } },
+      { "component": "Mic.03.Gain", "control": "mute", "midi": { "channel": 1, "note": 7  } },
+      { "component": "Mic.04.Gain", "control": "mute", "midi": { "channel": 1, "note": 10 } },
+      { "component": "Styb.Gain",   "control": "mute", "midi": { "channel": 1, "note": 13 } },
+      { "component": "Sptfy.Gain",  "control": "mute", "midi": { "channel": 1, "note": 16 } },
+      { "component": "ZoomRX.Gain", "control": "mute", "midi": { "channel": 1, "note": 19 } },
+      { "component": "Slides.Gain", "control": "mute", "midi": { "channel": 1, "note": 22 } },
+      { "component": "Bus.Mixer",   "control": "output.1.mute", "midi": { "channel": 1, "note": 25 } },
+      { "component": "Bus.Mixer",   "control": "output.2.mute", "midi": { "channel": 1, "note": 26 } },
+      { "component": "Bus.Mixer",   "control": "output.3.mute", "midi": { "channel": 1, "note": 27 } }
     ]
   }
 }

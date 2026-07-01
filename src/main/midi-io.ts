@@ -40,14 +40,19 @@ export class MidiIO extends EventEmitter {
   get connectedDeviceName(): string { return this._connectedDeviceName }
 
   sendNoteOn(channel: number, note: number, velocity = 127): void {
-    if (!this.output) return
-    // channel is 1-indexed; MIDI status byte uses 0-indexed channel
+    if (!this.output) {
+      console.warn(`[MIDI] sendNoteOn ch=${channel} note=${note} — no output port open`)
+      return
+    }
+    console.log(`[MIDI LED] NoteOn ch=${channel} note=${note} vel=${velocity}`)
     this.output.sendMessage([0x90 | (channel - 1), note, velocity])
   }
 
   sendNoteOff(channel: number, note: number): void {
     if (!this.output) return
-    this.output.sendMessage([0x80 | (channel - 1), note, 0])
+    console.log(`[MIDI LED] NoteOff ch=${channel} note=${note}`)
+    // MIDImix turns LEDs off with Note On velocity 0, not a Note Off message
+    this.output.sendMessage([0x90 | (channel - 1), note, 0])
   }
 
   private poll(): void {
@@ -89,10 +94,16 @@ export class MidiIO extends EventEmitter {
 
       // Open matching output port for LED feedback
       const out = new midi.Output()
+      const outCount = out.getPortCount()
+      const outPorts = Array.from({ length: outCount }, (_, i) => out.getPortName(i))
+      console.log(`[MIDI] Output ports available: ${outPorts.join(', ') || 'none'}`)
       const outIdx = this.findPortIndex(out, this.deviceName)
       if (outIdx !== null) {
         out.openPort(outIdx)
         this.output = out
+        console.log(`[MIDI] Output port opened: ${outPorts[outIdx]}`)
+      } else {
+        console.warn(`[MIDI] No output port found matching "${this.deviceName}" — LED feedback disabled`)
       }
 
       this.input = input

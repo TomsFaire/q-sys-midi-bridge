@@ -175,11 +175,21 @@ export class QrcClient extends EventEmitter {
   }
 
   private handleMessage(msg: JsonRpcResponse): void {
-    if (msg.id === undefined || msg.id === null) return
+    // No id = pure JSON-RPC notification (Q-SYS AutoPoll push)
+    if (msg.id === undefined || msg.id === null) {
+      if (msg.result !== undefined) {
+        console.log('[QRC] Notification (no id):', JSON.stringify(msg.result).slice(0, 120))
+        this.emit('notification', '', msg.result)
+      }
+      return
+    }
     const id = typeof msg.id === 'string' ? parseInt(msg.id, 10) : msg.id
     if (Number.isNaN(id)) {
-      // Non-numeric string ID = unsolicited push (e.g. ChangeGroup AutoPoll notification)
-      if (msg.result !== undefined) this.emit('notification', String(msg.id), msg.result)
+      // Non-numeric string ID = named notification (e.g. ChangeGroup AutoPoll id="mutes")
+      if (msg.result !== undefined) {
+        console.log(`[QRC] Notification (id="${msg.id}"):`, JSON.stringify(msg.result).slice(0, 120))
+        this.emit('notification', String(msg.id), msg.result)
+      }
       return
     }
     const pending = this.pending.get(id)

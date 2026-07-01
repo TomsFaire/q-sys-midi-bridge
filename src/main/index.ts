@@ -16,6 +16,7 @@ app.dock?.hide()
 
 // Single-instance lock
 if (!app.requestSingleInstanceLock()) {
+  console.error('[Bridge] Already running — quit the tray app first, then restart.')
   app.quit()
   process.exit(0)
 }

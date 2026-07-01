@@ -1,15 +1,17 @@
 # MIDI Q-Sys Bridge
 
-Menu-bar app that maps an Akai MIDImix to Q-Sys controls over QRC (TCP port 1710). Runs headlessly in the system tray; no window.
+macOS menu-bar app that maps an **Akai MIDImix** to Q-Sys controls over QRC (TCP port 1710). Runs headlessly in the system tray with no window. Bidirectional: mute button LEDs stay in sync with Q-Sys state.
+
+> **Primary hardware:** Akai MIDImix (USB class-compliant, 8 channels × 3 knob rows + faders + mute/rec-arm buttons). See [Adapting to other controllers](#adapting-to-other-controllers) if you want to use a different device.
 
 ---
 
 ## Requirements
 
-- macOS (menu bar app)
+- macOS (Apple Silicon or Intel)
 - Node.js 20+
 - Q-Sys Core with **External Control** enabled (Core Properties → External Control → Enable)
-- Akai MIDImix (or any class-compliant USB MIDI device — component names in config must match your device)
+- Akai MIDImix connected via USB
 
 ---
 
@@ -37,9 +39,9 @@ The app looks for `config.json` in these locations, in order:
 1. `~/Library/Application Support/midi-qsys-bridge/config.json` — user data dir (takes priority)
 2. `<app bundle>/config/config.json` — bundled default
 
-Edit the bundled `config/config.json` to get started, or copy it to the user data dir to survive app updates. **Restart the app after any config change.**
+Edit the bundled `config/config.json` to get started, or copy it to the user data dir to survive app updates.
 
-Use **Tray → Open Config File** to jump straight to the right file.
+Use **Tray → Configure Mappings** to assign Q-Sys components to physical controls interactively — click **Save & Apply** to reload the bridge live without restarting. Use **Tray → Open Config File** to edit the raw JSON directly.
 
 ---
 
@@ -163,6 +165,44 @@ Triggered by Note On. Loads by name or by bank/slot.
 
 ---
 
+## Adapting to other controllers
+
+The bridge is wired to the MIDImix in two places. To use a different controller you need to update both.
+
+### 1. Discover your controller's MIDI map
+
+Run the interactive learn script with your device connected:
+
+```bash
+node midi-learn.mjs
+```
+
+It walks you through every control one by one and records the CC channel/number or Note channel/number for each. Outputs a table and a config snippet. If your device has a different layout, edit the control list at the top of `midi-learn.mjs` before running.
+
+### 2. Update the physical control definitions
+
+Open `src/main/configurator.ts` and edit the `PHYSICAL_CONTROLS` array. Each entry describes one physical control and its MIDI address:
+
+```typescript
+{ id: 'F1', label: 'Fader 1', group: 'Faders', controlType: 'fader',  midi: m('cc',      7, 22) },
+{ id: 'M1', label: 'Mute 1',  group: 'Mutes',  controlType: 'toggle', midi: m('cc',      1, 22) },
+{ id: 'BL', label: 'Bank L',  group: 'Buttons', controlType: 'toggle', midi: m('note_on', 1, 25) },
+```
+
+`controlType` controls what the configurator generates when you assign a Q-Sys target:
+- `fader` / `knob` → `component_control` (continuous, with min/max scaling)
+- `toggle` → `toggle` (on/off, stateful)
+
+### 3. Update config.json
+
+Change `midi.deviceName` to a substring of your device's MIDI port name. The app does a substring match, so `"MIDI Mix"` matches `"MIDI Mix MIDI 1"`.
+
+### 4. LED feedback
+
+The MIDImix uses **Note On velocity 0** to turn off LEDs (not a Note Off message). Other devices vary — some use proper Note Off (0x80), some use CC, some have no LED control at all. If your device behaves differently, edit `sendNoteOff` in `src/main/midi-io.ts`.
+
+---
+
 ## MIDImix layout and CC/note numbers
 
 ```
@@ -224,6 +264,22 @@ When `feedback.enabled` is `true`, the bridge subscribes to mute control changes
 The note numbers in `mute_leds` must match the note numbers in the corresponding `toggle` mappings for the LEDs to track correctly.
 
 When `enabled: false`, toggle state is tracked locally only — the LED will drift if anything else changes the mute outside the MIDI controller.
+
+---
+
+## Unresolved modifier buttons
+
+Two physical buttons on the MIDImix are **modifiers by design** and are not currently assignable in the Configure Mappings UI.
+
+### SEND ALL
+The SEND ALL button sends **CC ch4/22** — the exact same MIDI message as Knob A 1. There is no way to distinguish the two at the MIDI level. Its design intent is: hold SEND ALL and turn any knob to broadcast that value to all 8 channels of that knob row simultaneously (a "gang" function for bulk-setting sends). Not yet implemented.
+
+### SOLO
+The SOLO button (note ch1/27) is designed as a modifier: hold SOLO and press a mute button to solo that channel (mute all others, unmute the selected one). Its LED is controlled by the device firmware — it cannot be driven externally via MIDI Note On the way the mute LEDs can. Currently the button is wired as a simple output mute toggle, but solo-while-held behavior has not been implemented.
+
+**Future options to consider:**
+- SEND ALL: implement gang-knob broadcast in the bridge (when CC ch4/22 fires, write that value to all mapped knob-row targets)
+- SOLO: implement hold-to-solo logic (track SOLO held state; intercept mute presses while held; mute all channels except the selected one)
 
 ---
 

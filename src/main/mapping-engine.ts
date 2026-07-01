@@ -119,6 +119,14 @@ export class MappingEngine {
       Rate: 0.05,
     }).catch((err) => console.error(`[Bridge] ChangeGroup AutoPoll failed: ${err.message}`))
 
+    // Immediate poll to sync initial LED state on connect
+    const initial = await this.qrc.call('ChangeGroup.Poll', { Id: CHANGE_GROUP_ID })
+      .catch((err) => {
+        console.error(`[Bridge] Initial ChangeGroup.Poll failed: ${err.message}`)
+        return null
+      })
+    if (initial) this.handleNotification(initial)
+
     console.log('[Bridge] ChangeGroup feedback active')
   }
 
@@ -135,9 +143,13 @@ export class MappingEngine {
   }
 
   private handleNotification(result: unknown): void {
+    console.log('[Bridge] handleNotification raw:', JSON.stringify(result).slice(0, 200))
     if (!result || typeof result !== 'object') return
     const r = result as { Changes?: Array<{ Component: string; Name: string; Value: number }> }
-    if (!Array.isArray(r.Changes)) return
+    if (!Array.isArray(r.Changes)) {
+      console.warn('[Bridge] handleNotification: no Changes array in result')
+      return
+    }
 
     for (const change of r.Changes) {
       const key = `${change.Component}:${change.Name}`
@@ -180,6 +192,14 @@ export class MappingEngine {
           Name: q.component,
           Controls: [{ Name: q.control, Value: next }],
         })
+        // Update LED immediately — Q-SYS won't push a notification for
+        // changes we initiated ourselves on the same connection.
+        console.log(`[Bridge DEBUG] toggle key="${key}" ledMapSize=${this.ledMap.size} led=${JSON.stringify(this.ledMap.get(key))}`)
+        const led = this.ledMap.get(key)
+        if (led) {
+          if (next === 1) this.midi.sendNoteOn(led.channel, led.note)
+          else this.midi.sendNoteOff(led.channel, led.note)
+        }
         this.log(`${label} → ${next === 1 ? 'MUTED' : 'unmuted'}`)
         break
       }

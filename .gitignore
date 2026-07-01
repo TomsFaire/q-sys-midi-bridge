@@ -2,4 +2,6 @@ node_modules/
 dist/
 release/
 *.js.map
+.DS_Store
+Icon?
 splendid-brewing-knuth.md
