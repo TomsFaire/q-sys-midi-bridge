@@ -1252,6 +1252,13 @@ const QRC = (() => {
         <tbody id="router-tbody"></tbody>
       </table>
     </div>
+    <div class="patch-section">
+      <h3 class="patch-section-title">Output Router</h3>
+      <table class="router-table">
+        <thead><tr><th class="router-col-label">Output</th><th class="router-col-select">Source</th></tr></thead>
+        <tbody id="output-router-tbody"></tbody>
+      </table>
+    </div>
   </div>
 </div>
 
@@ -2471,6 +2478,25 @@ const ROUTER_ROWS = [
   { label:'Slides',               mono:false, out:[15, 16] },
 ];
 
+// Router's own input indices 1-6 → the 6 signals produced by OUTPUT_STRIPS processing
+const OUTPUT_ROUTER_SOURCES = {
+  1: 'Mains L',   2: 'Mains R',
+  3: 'Zoom TX L', 4: 'Zoom TX R',
+  5: 'Rec L',     6: 'Rec R',
+};
+
+// Router's own output indices 1-16 → physical destination, in the order given
+const OUTPUT_ROUTER_ROWS = [
+  { label: 'Line 1',  out: 1 },  { label: 'Line 2',  out: 2 },
+  { label: 'Line 3',  out: 3 },  { label: 'Line 4',  out: 4 },
+  { label: 'Line 5',  out: 5 },  { label: 'Line 6',  out: 6 },
+  { label: 'Line 7',  out: 7 },  { label: 'Line 8',  out: 8 },
+  { label: 'Dante 1', out: 9 },  { label: 'Dante 2', out: 10 },
+  { label: 'Dante 3', out: 11 }, { label: 'Dante 4', out: 12 },
+  { label: 'Dante 5', out: 13 }, { label: 'Dante 6', out: 14 },
+  { label: 'Dante 7', out: 15 }, { label: 'Dante 8', out: 16 },
+];
+
 function makeSourceSelect(outputN) {
   const select = document.createElement('select');
   select.className = 'router-select';
@@ -2487,6 +2513,24 @@ function makeSourceSelect(outputN) {
     // Router uses per-crosspoint boolean controls: output.N.input.M.select
     // Setting one to true is enough — Q-SYS clears the rest automatically.
     QRC.component.set('Input.Router', [{ Name: `output.${outN}.input.${newInN}.select`, Value: true }]);
+  });
+  return select;
+}
+
+function makeOutputRouterSelect(outputN) {
+  const select = document.createElement('select');
+  select.className = 'router-select';
+  select.dataset.output = outputN;
+  for (let inp = 1; inp <= 6; inp++) {
+    const opt = document.createElement('option');
+    opt.value = inp;
+    opt.textContent = OUTPUT_ROUTER_SOURCES[inp];
+    select.appendChild(opt);
+  }
+  select.addEventListener('change', function() {
+    const outN = this.dataset.output;
+    const newInN = parseInt(this.value);
+    QRC.component.set('Output.Router', [{ Name: `output.${outN}.input.${newInN}.select`, Value: true }]);
   });
   return select;
 }
@@ -2537,6 +2581,22 @@ function buildPatchTab() {
     tr.appendChild(selectCell);
     tbody.appendChild(tr);
   });
+
+  // Output Router table
+  const outputTbody = document.getElementById('output-router-tbody');
+  outputTbody.innerHTML = '';
+  OUTPUT_ROUTER_ROWS.forEach(function(row) {
+    const tr = document.createElement('tr');
+    const labelCell = document.createElement('td');
+    labelCell.className = 'router-label';
+    labelCell.textContent = row.label;
+    tr.appendChild(labelCell);
+
+    const selectCell = document.createElement('td');
+    selectCell.appendChild(makeOutputRouterSelect(row.out));
+    tr.appendChild(selectCell);
+    outputTbody.appendChild(tr);
+  });
 }
 
 function loadPatchState() {
@@ -2562,6 +2622,19 @@ function loadPatchState() {
       });
     })
     .catch(e => console.error('[Router] loadPatchState error:', e.message));
+
+  QRC.call('Component.GetControls', { Name: 'Output.Router' })
+    .then(function(r) {
+      const controls = r?.Controls ?? [];
+      controls.forEach(function(c) {
+        if (!c.Value) return;
+        const match = c.Name.match(/^output\.(\d+)\.input\.(\d+)\.select$/);
+        if (!match) return;
+        const select = document.querySelector(`#output-router-tbody [data-output="${match[1]}"]`);
+        if (select) select.value = match[2];
+      });
+    })
+    .catch(e => console.error('[OutputRouter] loadPatchState error:', e.message));
 }
 
 buildPatchTab();
