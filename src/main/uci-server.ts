@@ -20,6 +20,7 @@ import path from 'node:path'
 import { Socket } from 'node:net'
 import { EventEmitter } from 'node:events'
 import { app } from 'electron'
+// @ts-ignore — @types/ws not installed; ws is a runtime dep
 import { WebSocketServer, WebSocket } from 'ws'
 
 export class UciServer extends EventEmitter {
@@ -74,7 +75,7 @@ export class UciServer extends EventEmitter {
     // ------------------------------------------------------------------
     const wss = new WebSocketServer({ server, path: '/qrc' })
 
-    wss.on('connection', (ws) => {
+    wss.on('connection', (ws: InstanceType<typeof WebSocket>) => {
       const tcp = new Socket()
       let tcpBuf = ''
 
@@ -105,7 +106,7 @@ export class UciServer extends EventEmitter {
         if (ws.readyState === WebSocket.OPEN) ws.close(1011, 'Core TCP closed')
       })
 
-      ws.on('message', (data) => {
+      ws.on('message', (data: Buffer | string) => {
         if (tcp.writable) tcp.write(data.toString() + '\0', 'utf-8')
       })
 

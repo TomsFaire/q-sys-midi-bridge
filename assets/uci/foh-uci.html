@@ -86,12 +86,18 @@ const QRC = (() => {
 
       // Core push notification: no id / null id, has method field
       if ((msg.id === undefined || msg.id === null) && msg.method) {
+        if (msg.method === 'ChangeGroup.Poll') {
+          cgCbs.get(msg.params?.Id)?.(msg.params?.Changes ?? []);
+          return;
+        }
+        if (msg.method !== 'EngineStatus') console.log('[QRC] push:', msg.method, JSON.stringify(msg.params).slice(0, 120));
         emit(msg.method, msg.params);
         return;
       }
 
       // ChangeGroup AutoPoll push: id is a string (group name)
       if (typeof msg.id === 'string') {
+        console.log('[QRC] string-id push:', msg.id, 'changes:', msg.result?.Changes?.length);
         cgCbs.get(msg.id)?.(msg.result?.Changes ?? []);
         return;
       }
@@ -123,8 +129,11 @@ const QRC = (() => {
     },
     changeGroup: {
       create: (id) => rpc('ChangeGroup.Add', { Id: id }).catch(() => {}),
-      addComponentControl: (id, comp) =>
-        rpc('ChangeGroup.AddComponentControl', { Id: id, Component: comp }).catch(() => {}),
+      addComponentControl: (id, compName, controlName) =>
+        rpc('ChangeGroup.AddComponentControl', {
+          Id: id,
+          Component: { Name: compName, Controls: [{ Name: controlName }] },
+        }).catch(() => {}),
       poll(id, rateMs, cb) {
         cgCbs.set(id, cb);
         rpc('ChangeGroup.AutoPoll', { Id: id, Rate: rateMs / 1000 }).catch(() => {});
@@ -779,8 +788,9 @@ const QRC = (() => {
 
   .meters-content {
     flex: 1 1 0;
+    min-height: 0;
     display: flex;
-    align-items: flex-end;
+    align-items: stretch;
     padding: 6px 12px 8px;
     gap: 0;
     overflow-x: auto;
@@ -792,6 +802,7 @@ const QRC = (() => {
     flex-direction: column;
     align-items: flex-start;
     flex-shrink: 0;
+    min-height: 0;
   }
   .meters-group-wrap + .meters-group-wrap {
     padding-left: 10px;
@@ -810,7 +821,7 @@ const QRC = (() => {
 
   .meters-group {
     display: flex;
-    align-items: flex-end;
+    align-items: stretch;
     gap: 2px;
     flex: 1 1 0;
     min-height: 0;
@@ -822,6 +833,7 @@ const QRC = (() => {
     align-items: center;
     gap: 2px;
     flex-shrink: 0;
+    min-width: fit-content;
   }
 
   .meter-col-label {
@@ -834,7 +846,7 @@ const QRC = (() => {
   .meter-col-bars {
     display: flex;
     gap: 1px;
-    align-items: flex-end;
+    align-items: stretch;
     flex: 1 1 0;
     min-height: 0;
   }
@@ -1869,17 +1881,20 @@ function loadInitialState() {
     buildSendsBar();
   });
 
+  // DIAGNOSTIC: probe 'Meter' component to verify name is correct
+  QRC.call('Component.GetControls', { Name: 'Meter' })
+    .then(r => console.log('[DIAG] Component.GetControls Meter →', JSON.stringify(r).slice(0, 300)))
+    .catch(e => console.warn('[DIAG] Component.GetControls Meter FAILED (wrong name?):', e.message));
+
   // Subscribe to VU meter changes
   QRC.changeGroup.create('vu_inputs');
   // Mics: meter channels 1–8
   BANKS.mics.forEach((ch, i) => {
-    QRC.changeGroup.addComponentControl('vu_inputs',
-      {Name: 'Meter', Control: `meter.${ch.meterCh[0]}`});
+    QRC.changeGroup.addComponentControl('vu_inputs', 'Meter', `meter.${ch.meterCh[0]}`);
   });
   // Stereo: meter channels 9–16 (use L channel)
   BANKS.stereo.forEach(ch => {
-    QRC.changeGroup.addComponentControl('vu_inputs',
-      {Name: 'Meter', Control: `meter.${ch.meterCh[0]}`});
+    QRC.changeGroup.addComponentControl('vu_inputs', 'Meter', `meter.${ch.meterCh[0]}`);
   });
 
   QRC.changeGroup.poll('vu_inputs', 40, function(changes) {
@@ -1892,13 +1907,16 @@ function loadInitialState() {
     });
   });
 
-  // Register vu_all ChangeGroup for drawer meters (don't poll yet — drawer starts collapsed)
+  // Register vu_all ChangeGroup for drawer meters
   QRC.changeGroup.create('vu_all');
   DRAWER_CHANNELS.forEach(function(ch) {
     ch.meterCh.forEach(function(idx) {
-      QRC.changeGroup.addComponentControl('vu_all', { Name: 'Meter', Control: 'meter.' + idx });
+      QRC.changeGroup.addComponentControl('vu_all', 'Meter', 'meter.' + idx);
     });
   });
+  // Restart poll if drawer was opened before connection was ready (or on reconnect)
+  vuAllPolling = false;
+  if (drawerState !== 'collapsed') resumeVuAll();
 }
 
 // ── Init ───────────────────────────────────────────────────────────────────────
@@ -2192,7 +2210,7 @@ function loadBusState() {
   });
 
   QRC.changeGroup.create('vu_buses');
-  BUS_STRIPS.forEach(bus => QRC.changeGroup.addComponentControl('vu_buses', { Name:'Meter', Control:`meter.${bus.meterCh}` }));
+  BUS_STRIPS.forEach(bus => QRC.changeGroup.addComponentControl('vu_buses', 'Meter', `meter.${bus.meterCh}`));
   QRC.changeGroup.poll('vu_buses', 40, function(changes) {
     changes.forEach(c => {
       const ch = parseInt(c.Name.split('.')[1]);
@@ -2413,7 +2431,7 @@ function loadOutputState() {
   });
 
   QRC.changeGroup.create('vu_outputs');
-  OUTPUT_STRIPS.forEach(s => QRC.changeGroup.addComponentControl('vu_outputs', { Name:'Meter', Control:`meter.${s.meterCh}` }));
+  OUTPUT_STRIPS.forEach(s => QRC.changeGroup.addComponentControl('vu_outputs', 'Meter', `meter.${s.meterCh}`));
   QRC.changeGroup.poll('vu_outputs', 40, function(changes) {
     changes.forEach(c => {
       const ch = parseInt(c.Name.split('.')[1]);
@@ -3066,14 +3084,13 @@ function buildDrawerContent() {
   });
 }
 
-function updateDrawerVu(meterChIdx, valueLinear) {
+function updateDrawerVu(meterChIdx, db) {
   const el = document.getElementById('drawer-vu-' + meterChIdx);
   if (!el) return;
-  const db = valueLinear > 0 ? 20 * Math.log10(valueLinear) : -Infinity;
   const segs = el.querySelectorAll('.vu-seg');
   const n = segs.length;
   segs.forEach(function(seg, i) {
-    const segDb = -60 + (i + 1) / n * 60;
+    const segDb = VU_MIN_DB + (i + 1) / n * (VU_MAX_DB - VU_MIN_DB);
     if (db >= segDb) {
       seg.style.background = db >= VU_CLIP_DB ? 'var(--vu-clip)' : db >= VU_MID_DB ? 'var(--vu-mid)' : 'var(--vu-low)';
     } else {
@@ -3099,7 +3116,9 @@ let vuAllPolling = false;
 function resumeVuAll() {
   if (vuAllPolling) return;
   vuAllPolling = true;
+  console.log('[VU] resumeVuAll: starting poll');
   QRC.changeGroup.poll('vu_all', 40, function(changes) {
+    console.log('[VU] vu_all poll cb, changes:', changes.length, changes[0]);
     changes.forEach(function(c) {
       const idx = parseInt(c.Name.split('.')[1]);
       updateDrawerVu(idx, c.Value);
