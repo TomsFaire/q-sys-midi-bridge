@@ -264,8 +264,14 @@
 </header>
 
 <details id="network-panel">
-  <summary>Network — UCI Web Server</summary>
+  <summary>Network — Q-SYS &amp; UCI</summary>
   <div class="network-body">
+    <div class="net-row">
+      <span class="net-label">Q-SYS Host</span>
+      <input type="text" id="host-input" placeholder="e.g. 192.168.1.50" style="flex:1;max-width:200px">
+      <button class="btn btn-ghost" id="host-save-btn">Connect</button>
+      <span id="host-status" style="font-size:11px;color:var(--text-dim)"></span>
+    </div>
     <div class="net-row">
       <span class="net-label">Local URL</span>
       <code id="net-local-url">—</code>
@@ -419,6 +425,8 @@ async function getControlsFor(componentName) {
   let controls = []
   try {
     controls = await ipcRenderer.invoke('cfg:get-component-controls', componentName)
+    // Natural/numeric sort so input.1 < input.2 < ... < input.9 < input.10
+    controls.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }))
   } catch { /* fallback: empty, user types manually */ }
   ctrlCache.set(componentName, controls)
   return controls
@@ -716,6 +724,13 @@ async function initNetwork() {
   const lanCode    = document.getElementById('net-lan-url')
   const lanCopyBtn = document.getElementById('net-lan-copy')
   const toggle     = document.getElementById('uci-enabled-toggle')
+  const hostInput  = document.getElementById('host-input')
+
+  // Load current host
+  try {
+    const host = await ipcRenderer.invoke('cfg:get-host')
+    hostInput.value = host ?? ''
+  } catch { /* leave blank */ }
 
   try {
     const info = await ipcRenderer.invoke('cfg:get-network-info')
@@ -734,6 +749,37 @@ async function initNetwork() {
     lanCopyBtn.disabled = true
   }
 }
+
+document.getElementById('host-save-btn').addEventListener('click', async () => {
+  const hostInput  = document.getElementById('host-input')
+  const hostStatus = document.getElementById('host-status')
+  const host = hostInput.value.trim()
+  hostStatus.textContent = 'Saving…'
+  hostStatus.style.color = 'var(--text-dim)'
+  try {
+    const { needsRestart } = await ipcRenderer.invoke('cfg:save-host', host)
+    if (!host) {
+      hostStatus.textContent = '✓ Cleared'
+    } else if (needsRestart) {
+      hostStatus.textContent = '✓ Saved — restart the app to connect'
+    } else {
+      hostStatus.textContent = '✓ Saved — connecting…'
+    }
+    hostStatus.style.color = 'var(--green)'
+  } catch (e) {
+    hostStatus.textContent = '✗ ' + e.message
+    hostStatus.style.color = 'var(--red)'
+  }
+})
+
+// Main process pushes this when the configurator's QRC connects after a host change
+ipcRenderer.on('cfg:host-connected', async () => {
+  await refreshQsys()
+  renderTable()
+  const hostStatus = document.getElementById('host-status')
+  hostStatus.textContent = '✓ Connected'
+  setTimeout(() => { hostStatus.textContent = '' }, 3000)
+})
 
 document.getElementById('net-local-copy').addEventListener('click', () => {
   clipboard.writeText(document.getElementById('net-local-url').textContent)

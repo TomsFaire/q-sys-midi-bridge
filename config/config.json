@@ -1,6 +1,6 @@
 {
   "qsys": {
-    "host": "10.4.84.20",
+    "host": "",
     "port": 1710
   },
   // UCI web server: serves foh-uci.html and relays browser WebSocket → Core.

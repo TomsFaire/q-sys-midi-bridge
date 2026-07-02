@@ -71,13 +71,37 @@ export class Bridge extends EventEmitter {
   /** Hot-reload config from disk without restarting the app. */
   async reloadConfig(): Promise<void> {
     const newConfig = loadConfig()
+    const hostChanged = newConfig.qsys.host !== this.config.qsys.host
+
     this.config = newConfig
     this.engine.reload(newConfig)
-    if (this.qrc.isConnected) {
+
+    if (hostChanged) {
+      await this.qrc.disconnect()
+      this.qrc = new QrcClient(newConfig.qsys.host, newConfig.qsys.port)
+      // Update engine's QRC reference before connecting so notifications
+      // and outgoing calls use the new socket from the moment it connects.
+      this.engine.setQrc(this.qrc)
+      this.qrc.on('connect', () => {
+        console.log(`[QRC] Reconnected to Q-Sys at ${newConfig.qsys.host}`)
+        this.engine.setupChangeGroup().catch((err) => {
+          console.error(`[Bridge] setupChangeGroup error: ${err.message}`)
+        })
+        this.emit('status-change')
+      })
+      this.qrc.on('disconnect', (reason: string) => {
+        console.log(`[QRC] Disconnected: ${reason}`)
+        this.emit('status-change')
+      })
+      this.qrc.connect().catch((err) => {
+        console.error(`[QRC] Reconnect failed: ${err.message}`)
+      })
+    } else if (this.qrc.isConnected) {
       await this.engine.setupChangeGroup().catch((err) => {
         console.error(`[Bridge] setupChangeGroup after reload: ${err.message}`)
       })
     }
+
     this.emit('status-change')
     console.log('[Bridge] Config hot-reloaded')
   }
