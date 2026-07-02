@@ -109,10 +109,11 @@ const QRC = (() => {
   return {
     connect: (url) => doConnect(url),
     on: (event, cb) => { handlers[event] = cb; },
+    call: (method, params) => rpc(method, params),
     component: {
       set(name, controls) {
-        // Fire-and-forget
-        rpc('Component.Set', { Name: name, Controls: controls }).catch(() => {});
+        rpc('Component.Set', { Name: name, Controls: controls })
+          .catch(e => console.error('[QRC] Component.Set error:', name, JSON.stringify(controls), '→', e.message));
       },
       get(name, controlNames, cb) {
         rpc('Component.Get', { Name: name, Controls: controlNames })
@@ -947,6 +948,7 @@ const QRC = (() => {
     <button id="proc-tab-comp" class="proc-tab-btn">Comp</button>
     <button id="proc-tab-afc"  class="proc-tab-btn">AFC</button>
     <button id="proc-tab-gate" class="proc-tab-btn">Gate</button>
+    <button id="proc-tab-insert" class="proc-tab-btn proc-tab-hidden" data-tab="insert">Insert</button>
   </div>
   <div class="proc-content-area">
 
@@ -1174,6 +1176,28 @@ const QRC = (() => {
           </div>
         </div>
       </div>
+    </div>
+
+    <!-- Insert tab -->
+    <div id="proc-content-insert" class="proc-tab-content">
+      <button id="proc-insert-toggle" class="proc-bypass-btn" style="margin-bottom:14px">BYPASS</button>
+      <div class="proc-comp-section">
+        <div class="proc-comp-row">
+          <label>Send Level</label>
+          <div class="proc-slider-row">
+            <input id="proc-insert-send" class="proc-slider" type="range" min="-24" max="24" step="0.1" value="0">
+            <span id="proc-insert-send-val" class="proc-val">0.0 dB</span>
+          </div>
+        </div>
+        <div class="proc-comp-row">
+          <label>Return Level</label>
+          <div class="proc-slider-row">
+            <input id="proc-insert-return" class="proc-slider" type="range" min="-24" max="24" step="0.1" value="0">
+            <span id="proc-insert-return-val" class="proc-val">0.0 dB</span>
+          </div>
+        </div>
+      </div>
+      <div style="text-align:center;margin-top:16px;color:var(--fg-dim);font-size:11px" id="proc-insert-label"></div>
     </div>
 
   </div><!-- /proc-content-area -->
@@ -1910,8 +1934,8 @@ QRC.on('error', function() {
 <!-- ── BUSES tab ──────────────────────────────────────────────────────────── -->
 <script>
 const BUS_STRIPS = [
-  { id:'microom',    mixerSlot:1,  meterCh:17, labelPin:'MicRoom',    defaultLabel:'Mic Room',   isStereo:false, hasComp:true,  hasAFC:true,  hasGate:true  },
-  { id:'miczoom',    mixerSlot:2,  meterCh:18, labelPin:'MicZoom',    defaultLabel:'Mic Zoom',   isStereo:false, hasComp:true,  hasAFC:true,  hasGate:true  },
+  { id:'microom',    mixerSlot:1,  meterCh:17, labelPin:'MicRoom',    defaultLabel:'Mic Room',   isStereo:false, hasComp:true,  hasAFC:true,  hasGate:true,  hasInsert:true },
+  { id:'miczoom',    mixerSlot:2,  meterCh:18, labelPin:'MicZoom',    defaultLabel:'Mic Zoom',   isStereo:false, hasComp:true,  hasAFC:true,  hasGate:true,  hasInsert:true },
   { id:'musicroom',  mixerSlot:3,  meterCh:19, labelPin:'MusicRoom',  defaultLabel:'Music Room', isStereo:true,  hasComp:false, hasAFC:false, hasGate:false },
   { id:'musiczoom',  mixerSlot:5,  meterCh:21, labelPin:'MusicZoom',  defaultLabel:'Music Zoom', isStereo:true,  hasComp:false, hasAFC:false, hasGate:false },
   { id:'slidesroom', mixerSlot:7,  meterCh:23, labelPin:'SlidesRoom', defaultLabel:'Slides Rm',  isStereo:true,  hasComp:false, hasAFC:false, hasGate:false },
@@ -1972,6 +1996,14 @@ function buildBusStrips() {
         compComp: bus.hasComp ? bus.labelPin + '.Comp' : null,
         afcComp:  bus.hasAFC  ? bus.labelPin + '.AFC'  : null,
         gateComp: bus.hasGate ? bus.labelPin + '.Gate' : null,
+        insertComp: bus.hasInsert ? {
+          sel:    bus.labelPin + '.Insert.Sel',
+          send:   bus.labelPin + '.Insert.Send',
+          return: bus.labelPin + '.Insert.Return',
+          label:  bus.labelPin === 'MicRoom'
+                    ? 'Flex Out 1 → AI Tool → Flex In 1'
+                    : 'Flex Out 2 → AI Tool → Flex In 2'
+        } : null,
       });
     });
     labelRow.appendChild(labelEl);
@@ -2432,7 +2464,11 @@ function makeSourceSelect(outputN) {
     select.appendChild(opt);
   }
   select.addEventListener('change', function() {
-    QRC.component.set('Input.Router', [{ Name:`output.${this.dataset.output}.select`, Value:parseInt(this.value) }]);
+    const outN = this.dataset.output;
+    const newInN = parseInt(this.value);
+    // Router uses per-crosspoint boolean controls: output.N.input.M.select
+    // Setting one to true is enough — Q-SYS clears the rest automatically.
+    QRC.component.set('Input.Router', [{ Name: `output.${outN}.input.${newInN}.select`, Value: true }]);
   });
   return select;
 }
@@ -2496,16 +2532,18 @@ function loadPatchState() {
     });
   });
 
-  const routerControls = [];
-  ROUTER_ROWS.forEach(row => row.out.forEach(n => routerControls.push(`output.${n}.select`)));
-  QRC.component.get('Input.Router', routerControls, function(controls) {
-    controls.forEach(c => {
-      const match = c.Name.match(/output\.(\d+)\.select/);
-      if (!match) return;
-      const select = document.querySelector(`#router-tbody [data-output="${match[1]}"]`);
-      if (select) select.value = c.Value;
-    });
-  });
+  QRC.call('Component.GetControls', { Name: 'Input.Router' })
+    .then(function(r) {
+      const controls = r?.Controls ?? [];
+      controls.forEach(function(c) {
+        if (!c.Value) return;
+        const match = c.Name.match(/^output\.(\d+)\.input\.(\d+)\.select$/);
+        if (!match) return;
+        const select = document.querySelector(`#router-tbody [data-output="${match[1]}"]`);
+        if (select) select.value = match[2];
+      });
+    })
+    .catch(e => console.error('[Router] loadPatchState error:', e.message));
 }
 
 buildPatchTab();
@@ -3086,11 +3124,13 @@ function openProcessingSheet(cfg) {
     compComp: cfg.compComp || null,
     afcComp:  cfg.afcComp  || null,
     gateComp: cfg.gateComp || null,
+    insertComp: cfg.insertComp || null,
   };
   document.getElementById('proc-channel-name').textContent = cfg.name;
   document.getElementById('proc-tab-comp').classList.toggle('proc-tab-hidden', !window.procSheet.compComp);
   document.getElementById('proc-tab-afc').classList.toggle('proc-tab-hidden',  !window.procSheet.afcComp);
   document.getElementById('proc-tab-gate').classList.toggle('proc-tab-hidden', !window.procSheet.gateComp);
+  document.getElementById('proc-tab-insert').classList.toggle('proc-tab-hidden', !window.procSheet.insertComp);
   switchProcTab('eq');
   document.getElementById('processing-overlay').classList.add('active');
   document.getElementById('processing-sheet').classList.add('active');
@@ -3099,6 +3139,7 @@ function openProcessingSheet(cfg) {
   if (window.procSheet.compComp) loadCompState();
   if (window.procSheet.afcComp)  loadAFCState();
   if (window.procSheet.gateComp) loadGateState();
+  if (window.procSheet.insertComp) loadInsertState();
 }
 
 function closeProcessingSheet() {
@@ -3378,6 +3419,57 @@ document.getElementById('proc-gate-bypass').addEventListener('click', function()
     if (window.procSheet && window.procSheet.gateComp)
       QRC.component.set(window.procSheet.gateComp, [{Name:ctrlName, Value:parseFloat(this.value)}]);
   });
+});
+
+// ── Insert ────────────────────────────────────────────────────────────────────
+function loadInsertState() {
+  const ins = window.procSheet.insertComp;
+  if (!ins) return;
+  document.getElementById('proc-insert-label').textContent = ins.label || '';
+
+  QRC.component.get(ins.sel, ['output.1.route'], function(ctrls) {
+    const route = ctrls[0] && ctrls[0].Value;
+    const btn = document.getElementById('proc-insert-toggle');
+    const isInsert = route === 2;
+    btn.textContent = isInsert ? 'INSERT ON' : 'BYPASS';
+    btn.classList.toggle('active', isInsert);
+  });
+
+  QRC.component.get(ins.send, ['gain'], function(ctrls) {
+    const gain = (ctrls[0] && ctrls[0].Value) || 0;
+    document.getElementById('proc-insert-send').value = gain;
+    document.getElementById('proc-insert-send-val').textContent = gain.toFixed(1) + ' dB';
+  });
+
+  QRC.component.get(ins.return, ['gain'], function(ctrls) {
+    const gain = (ctrls[0] && ctrls[0].Value) || 0;
+    document.getElementById('proc-insert-return').value = gain;
+    document.getElementById('proc-insert-return-val').textContent = gain.toFixed(1) + ' dB';
+  });
+}
+
+document.getElementById('proc-insert-toggle').addEventListener('click', function() {
+  const ins = window.procSheet.insertComp;
+  if (!ins) return;
+  const isInsert = this.textContent === 'INSERT ON';
+  const newRoute = isInsert ? 1 : 2;
+  QRC.component.set(ins.sel, [{Name: 'output.1.route', Value: newRoute}]);
+  this.textContent = isInsert ? 'BYPASS' : 'INSERT ON';
+  this.classList.toggle('active', !isInsert);
+});
+
+document.getElementById('proc-insert-send').addEventListener('input', function() {
+  const val = parseFloat(this.value);
+  document.getElementById('proc-insert-send-val').textContent = val.toFixed(1) + ' dB';
+  if (window.procSheet.insertComp)
+    QRC.component.set(window.procSheet.insertComp.send, [{Name: 'gain', Value: val}]);
+});
+
+document.getElementById('proc-insert-return').addEventListener('input', function() {
+  const val = parseFloat(this.value);
+  document.getElementById('proc-insert-return-val').textContent = val.toFixed(1) + ' dB';
+  if (window.procSheet.insertComp)
+    QRC.component.set(window.procSheet.insertComp.return, [{Name: 'gain', Value: val}]);
 });
 
 // ── Compressor ────────────────────────────────────────────────────────────────
