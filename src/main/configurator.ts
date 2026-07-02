@@ -99,7 +99,7 @@ export class Configurator {
   private ipcRegistered = false
 
   constructor(
-    private readonly host: string,
+    private host: string,
     private readonly port: number,
     private readonly configFilePath: string,
     private readonly onReload?: () => Promise<void>,
@@ -169,6 +169,34 @@ export class Configurator {
       connected: this.qrc?.isConnected ?? false,
       host: this.host,
     }))
+
+    // ── Get / save Q-SYS host ───────────────────────────────────────────────
+    ipcMain.handle('cfg:get-host', () => {
+      try {
+        const raw = fs.readFileSync(this.configFilePath, 'utf-8')
+        return (this.parseConfig(raw).qsys as { host?: string })?.host ?? ''
+      } catch { return '' }
+    })
+
+    ipcMain.handle('cfg:save-host', async (_event, host: string) => {
+      const raw = fs.readFileSync(this.configFilePath, 'utf-8')
+      const config = this.parseConfig(raw)
+      ;(config.qsys as Record<string, unknown>).host = host
+      fs.writeFileSync(this.configFilePath, JSON.stringify(config, null, 2), 'utf-8')
+
+      // Reconnect the configurator's own QRC to the new host
+      this.host = host
+      this.qrc?.disconnect().catch(() => {})
+      if (host) {
+        this.qrc = new QrcClient(host, this.port)
+        this.qrc.connect().catch(() => {})
+      } else {
+        this.qrc = null
+      }
+
+      // Also reload the bridge so it picks up the new host
+      if (this.onReload) await this.onReload()
+    })
 
     // ── Discover all components ─────────────────────────────────────────────
     ipcMain.handle('cfg:discover-components', async () => {

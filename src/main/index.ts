@@ -56,11 +56,12 @@ app.whenReady().then(async () => {
     // Still start the app — show error in tray menu
   }
 
-  const bridge = config ? new Bridge(config) : null
+  const hasHost = !!config?.qsys?.host
+  const bridge = config && hasHost ? new Bridge(config) : null
 
   // UCI web server — serves foh-uci.html and relays browser WS traffic to the
   // Core over its own TCP sockets (independent of the MIDI bridge connection).
-  const uciEnabled = config?.uci?.enabled ?? true
+  const uciEnabled = hasHost && (config?.uci?.enabled ?? true)
   const uciPort = config?.uci?.port ?? 3001
   let uciServer: UciServer | null = null
   if (config && uciEnabled) {
@@ -75,10 +76,10 @@ app.whenReady().then(async () => {
 
   // Configurator window (lazily opened from tray menu)
   const configurator = new Configurator(
-    config?.qsys.host ?? '10.4.84.20',
+    config?.qsys.host ?? '',
     config?.qsys.port ?? 1710,
     findConfigPath(),
-    bridge ? async () => { await bridge.reloadConfig() } : undefined,
+    async () => { await bridge?.reloadConfig() },
     uciPort,
   )
 
@@ -105,7 +106,7 @@ app.whenReady().then(async () => {
 
     const items: Electron.MenuItemConstructorOptions[] = [
       {
-        label: `Q-Sys:  ${qrcOk ? `● Connected (${bridge!.qsysHost})` : '○ Disconnected'}`,
+        label: `Q-Sys:  ${qrcOk ? `● Connected (${bridge!.qsysHost})` : hasHost ? '○ Disconnected' : '○ No host — open Configure Mappings'}`,
         enabled: false,
       },
       {
@@ -187,6 +188,10 @@ app.whenReady().then(async () => {
   if (bridge) {
     await bridge.start()
     refreshTray()
+  } else if (!hasHost) {
+    // No Q-SYS host configured — open configurator immediately so user can enter it
+    refreshTray()
+    configurator.open()
   } else {
     tray.setContextMenu(
       Menu.buildFromTemplate([
