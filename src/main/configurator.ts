@@ -106,6 +106,7 @@ export class Configurator {
     // Configured UCI web server port — used as the fallback when config.uci
     // hasn't been written to the file yet (e.g. no config.json present).
     private readonly uciPort: number = 3001,
+    private readonly isBridgeActive: () => boolean = () => false,
   ) {
     this.registerIpc()
   }
@@ -171,31 +172,38 @@ export class Configurator {
     }))
 
     // ── Get / save Q-SYS host ───────────────────────────────────────────────
-    ipcMain.handle('cfg:get-host', () => {
+    ipcMain.handle('cfg:get-host', () => this.host)
+
+    ipcMain.handle('cfg:save-host', async (event, host: string) => {
+      const trimmed = host.trim()
+
       try {
         const raw = fs.readFileSync(this.configFilePath, 'utf-8')
-        return (this.parseConfig(raw).qsys as { host?: string })?.host ?? ''
-      } catch { return '' }
-    })
-
-    ipcMain.handle('cfg:save-host', async (_event, host: string) => {
-      const raw = fs.readFileSync(this.configFilePath, 'utf-8')
-      const config = this.parseConfig(raw)
-      ;(config.qsys as Record<string, unknown>).host = host
-      fs.writeFileSync(this.configFilePath, JSON.stringify(config, null, 2), 'utf-8')
+        const config = this.parseConfig(raw)
+        ;(config.qsys as Record<string, unknown>).host = trimmed
+        fs.writeFileSync(this.configFilePath, JSON.stringify(config, null, 2), 'utf-8')
+      } catch (err) {
+        throw new Error(`Could not save config: ${(err as Error).message}`)
+      }
 
       // Reconnect the configurator's own QRC to the new host
-      this.host = host
+      this.host = trimmed
       this.qrc?.disconnect().catch(() => {})
-      if (host) {
-        this.qrc = new QrcClient(host, this.port)
+      if (trimmed) {
+        this.qrc = new QrcClient(trimmed, this.port)
+        // Push a status update to the renderer window when the connection lands
+        this.qrc.once('connect', () => {
+          this.window?.webContents.send('cfg:host-connected')
+        })
         this.qrc.connect().catch(() => {})
       } else {
         this.qrc = null
       }
 
-      // Also reload the bridge so it picks up the new host
+      // Reload the bridge if it is running (no-op via optional chaining when bridge is null)
       if (this.onReload) await this.onReload()
+
+      return { needsRestart: !this.isBridgeActive() }
     })
 
     // ── Discover all components ─────────────────────────────────────────────

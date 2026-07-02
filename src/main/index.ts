@@ -81,6 +81,7 @@ app.whenReady().then(async () => {
     findConfigPath(),
     async () => { await bridge?.reloadConfig() },
     uciPort,
+    () => bridge !== null,
   )
 
   // Build the tray icon

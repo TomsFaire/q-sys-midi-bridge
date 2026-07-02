@@ -71,6 +71,15 @@ export class MappingEngine {
     return this.ccMap.size + this.noteMap.size
   }
 
+  /** Swap the underlying QRC client (e.g. after a host change). */
+  setQrc(qrc: QrcClient): void {
+    this.qrc.removeAllListeners('notification')
+    this.qrc = qrc
+    if (this.config.feedback.enabled) {
+      this.qrc.on('notification', (_id: string, result: unknown) => this.handleNotification(result))
+    }
+  }
+
   /** Hot-reload mappings from a new config without restarting the app. */
   reload(config: Config): void {
     this.ccMap.clear()

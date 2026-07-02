@@ -755,19 +755,28 @@ document.getElementById('host-save-btn').addEventListener('click', async () => {
   hostStatus.textContent = 'Saving…'
   hostStatus.style.color = 'var(--text-dim)'
   try {
-    await ipcRenderer.invoke('cfg:save-host', host)
-    hostStatus.textContent = host ? '✓ Saved — reconnecting…' : '✓ Cleared'
+    const { needsRestart } = await ipcRenderer.invoke('cfg:save-host', host)
+    if (!host) {
+      hostStatus.textContent = '✓ Cleared'
+    } else if (needsRestart) {
+      hostStatus.textContent = '✓ Saved — restart the app to connect'
+    } else {
+      hostStatus.textContent = '✓ Saved — connecting…'
+    }
     hostStatus.style.color = 'var(--green)'
-    // Refresh the Q-SYS status dot after a short delay for reconnect
-    setTimeout(async () => {
-      await refreshQsys()
-      renderTable()
-      hostStatus.textContent = ''
-    }, 1500)
   } catch (e) {
     hostStatus.textContent = '✗ ' + e.message
     hostStatus.style.color = 'var(--red)'
   }
+})
+
+// Main process pushes this when the configurator's QRC connects after a host change
+ipcRenderer.on('cfg:host-connected', async () => {
+  await refreshQsys()
+  renderTable()
+  const hostStatus = document.getElementById('host-status')
+  hostStatus.textContent = '✓ Connected'
+  setTimeout(() => { hostStatus.textContent = '' }, 3000)
 })
 
 document.getElementById('net-local-copy').addEventListener('click', () => {

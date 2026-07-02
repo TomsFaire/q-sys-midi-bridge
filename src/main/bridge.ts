@@ -79,6 +79,9 @@ export class Bridge extends EventEmitter {
     if (hostChanged) {
       await this.qrc.disconnect()
       this.qrc = new QrcClient(newConfig.qsys.host, newConfig.qsys.port)
+      // Update engine's QRC reference before connecting so notifications
+      // and outgoing calls use the new socket from the moment it connects.
+      this.engine.setQrc(this.qrc)
       this.qrc.on('connect', () => {
         console.log(`[QRC] Reconnected to Q-Sys at ${newConfig.qsys.host}`)
         this.engine.setupChangeGroup().catch((err) => {
