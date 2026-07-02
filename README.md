@@ -31,7 +31,7 @@ To package a distributable DMG:
 
 ```bash
 npm run package
-# output: release/MIDI Q-Sys Bridge-0.1.0.dmg
+# output: release/MIDI Q-Sys Bridge-0.2.3-arm64.dmg
 ```
 
 ---
