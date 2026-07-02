@@ -425,6 +425,8 @@ async function getControlsFor(componentName) {
   let controls = []
   try {
     controls = await ipcRenderer.invoke('cfg:get-component-controls', componentName)
+    // Natural/numeric sort so input.1 < input.2 < ... < input.9 < input.10
+    controls.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }))
   } catch { /* fallback: empty, user types manually */ }
   ctrlCache.set(componentName, controls)
   return controls
