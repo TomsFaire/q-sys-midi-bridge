@@ -20,7 +20,6 @@ import path from 'node:path'
 import { Socket } from 'node:net'
 import { EventEmitter } from 'node:events'
 import { app } from 'electron'
-// @ts-ignore — @types/ws not installed; ws is a runtime dep
 import { WebSocketServer, WebSocket } from 'ws'
 
 export class UciServer extends EventEmitter {
