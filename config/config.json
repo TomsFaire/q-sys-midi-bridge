@@ -352,8 +352,8 @@
       },
       "qsys": {
         "type": "toggle",
-        "component": "Input.Mixer",
-        "control": "input.1.mute"
+        "component": "Mic.01.Gain",
+        "control": "mute"
       }
     },
     {
@@ -365,8 +365,8 @@
       },
       "qsys": {
         "type": "toggle",
-        "component": "Input.Mixer",
-        "control": "input.2.mute"
+        "component": "Mic.02.Gain",
+        "control": "mute"
       }
     },
     {
@@ -378,8 +378,8 @@
       },
       "qsys": {
         "type": "toggle",
-        "component": "Input.Mixer",
-        "control": "input.3.mute"
+        "component": "Mic.03.Gain",
+        "control": "mute"
       }
     },
     {
@@ -391,8 +391,8 @@
       },
       "qsys": {
         "type": "toggle",
-        "component": "Input.Mixer",
-        "control": "input.4.mute"
+        "component": "Mic.04.Gain",
+        "control": "mute"
       }
     },
     {
@@ -404,8 +404,8 @@
       },
       "qsys": {
         "type": "toggle",
-        "component": "Input.Mixer",
-        "control": "input.5.mute"
+        "component": "Styb.Gain",
+        "control": "mute"
       }
     },
     {
@@ -417,8 +417,8 @@
       },
       "qsys": {
         "type": "toggle",
-        "component": "Input.Mixer",
-        "control": "input.6.mute"
+        "component": "Sptfy.Gain",
+        "control": "mute"
       }
     },
     {
@@ -430,8 +430,8 @@
       },
       "qsys": {
         "type": "toggle",
-        "component": "Input.Mixer",
-        "control": "input.7.mute"
+        "component": "ZoomRX.Gain",
+        "control": "mute"
       }
     },
     {
@@ -443,8 +443,8 @@
       },
       "qsys": {
         "type": "toggle",
-        "component": "Input.Mixer",
-        "control": "input.8.mute"
+        "component": "Slides.Gain",
+        "control": "mute"
       }
     },
     {

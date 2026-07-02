@@ -53,6 +53,25 @@ Use **Tray → Configure Mappings** to assign Q-Sys components to physical contr
 
 The bridge talks to Q-Sys using **QRC (JSON-RPC 2.0 over TCP port 1710)**. No Lua scripting or Named Actions are required — it calls `Component.Set` and `Control.Set` directly.
 
+### Signal flow design methodology
+
+Every signal path uses a **Gain block before it enters a mixer or any effects**. This means:
+
+- **Effects are post-fader** — signal goes: source → Gain block → effects/mixer
+- **All gain adjustments happen at the Gain block** — the mixer channel levels are left at unity
+- **All mutes happen at the Gain block** — do not mute at the mixer input; mute at the Gain block for that signal path
+- **UCI faders and buttons must target the same Gain blocks** as the MIDI controller — otherwise MIDI and UCI will fight each other
+
+The **only exception** is final output control: the mixer output gain and output mute (e.g. `Bus.Mixer output.1.gain` / `output.1.mute`) are the correct place to adjust final output level and kill the house mix.
+
+This means in your Q-Sys design each channel looks like:
+
+```
+[Analog/USB Input] → [Mic.01.Gain (gain + mute)] → [Input.Mixer] → [Bus.Mixer] → [Output]
+```
+
+And in `config.json`, faders and mutes always target the Gain block component (`Mic.01.Gain`, `Styb.Gain`, etc.), never `Input.Mixer input.N.gain/mute`.
+
 ### What you need in the design
 
 1. **Enable External Control** on the Core  
@@ -135,8 +154,8 @@ Use this for mute buttons. State is tracked locally and flipped on each Note On.
 ```jsonc
 "qsys": {
   "type": "toggle",
-  "component": "Input.Mixer",
-  "control": "input.1.mute"
+  "component": "Mic.01.Gain",   // target the Gain block, not the mixer input
+  "control": "mute"
 }
 ```
 
@@ -258,8 +277,8 @@ When `feedback.enabled` is `true`, the bridge subscribes to mute control changes
   "enabled": true,
   "mute_leds": [
     // Each entry maps a Q-Sys mute control to a MIDImix LED
-    { "component": "Input.Mixer", "control": "input.1.mute", "midi": {"channel": 1, "note": 1} },
-    { "component": "Input.Mixer", "control": "input.2.mute", "midi": {"channel": 1, "note": 4} }
+    { "component": "Mic.01.Gain", "control": "mute", "midi": {"channel": 1, "note": 1} },
+    { "component": "Mic.02.Gain", "control": "mute", "midi": {"channel": 1, "note": 4} }
     // ... etc
   ]
 }
