@@ -5,7 +5,7 @@
  * Config is loaded once at startup; restart app to reload config changes.
  */
 
-import { app, Tray, Menu, nativeImage, shell, clipboard } from 'electron'
+import { app, Tray, Menu, nativeImage, shell, clipboard, powerSaveBlocker } from 'electron'
 import path from 'node:path'
 import { loadConfig, getConfigPath, findConfigPath, seedUserConfig } from './config.js'
 import { Bridge } from './bridge.js'
@@ -186,9 +186,14 @@ app.whenReady().then(async () => {
   // Also refresh on a timer in case the tray menu is already open
   setInterval(refreshTray, 3000)
 
+  let powerSaveBlockerId: number | null = null
+
   if (bridge) {
     await bridge.start()
     refreshTray()
+    // Keep the system awake so the Q-Sys socket and MIDI device survive
+    // idle sleep — the app can't reconnect while the whole process is suspended.
+    powerSaveBlockerId = powerSaveBlocker.start('prevent-app-suspension')
   } else if (!hasHost) {
     // No Q-SYS host configured — open configurator immediately so user can enter it
     refreshTray()
@@ -205,6 +210,7 @@ app.whenReady().then(async () => {
   }
 
   app.on('before-quit', async () => {
+    if (powerSaveBlockerId !== null) powerSaveBlocker.stop(powerSaveBlockerId)
     uciServer?.stop()
     await bridge?.stop()
   })
