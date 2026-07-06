@@ -1,6 +1,6 @@
 {
   "name": "midi-qsys-bridge",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "description": "Akai MIDImix → Q-Sys FOH Mixer bridge",
   "main": "dist/main/index.js",
   "scripts": {
