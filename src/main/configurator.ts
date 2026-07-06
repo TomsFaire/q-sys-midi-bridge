@@ -10,7 +10,7 @@ import { BrowserWindow, ipcMain, app } from 'electron'
 import path from 'node:path'
 import fs from 'node:fs'
 import { QrcClient } from './qrc-client.js'
-import { stripComments } from './config.js'
+import { isValidPort, stripComments } from './config.js'
 import { getLanIPv4 } from './network.js'
 
 // ── Physical controls ─────────────────────────────────────────────────────────
@@ -285,6 +285,25 @@ export class Configurator {
       uci.enabled = enabled
       config.uci = uci
       fs.writeFileSync(this.configFilePath, JSON.stringify(config, null, 2), 'utf-8')
+    })
+
+    // ── Set the UCI web server port (restart required to apply) ────────────
+    ipcMain.handle('cfg:set-uci-port', (_event, port: number) => {
+      if (!isValidPort(port)) {
+        throw new Error('Port must be a whole number between 1 and 65535')
+      }
+      const raw = fs.readFileSync(this.configFilePath, 'utf-8')
+      const config = this.parseConfig(raw)
+      const uci = (config.uci as Record<string, unknown> | undefined) ?? {}
+      uci.port = port
+      config.uci = uci
+      fs.writeFileSync(this.configFilePath, JSON.stringify(config, null, 2), 'utf-8')
+    })
+
+    // ── Relaunch the app (used after a port change) ─────────────────────────
+    ipcMain.handle('cfg:restart-app', () => {
+      app.relaunch()
+      app.exit(0)
     })
   }
 }

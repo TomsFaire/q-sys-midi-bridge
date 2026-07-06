@@ -318,6 +318,27 @@ independent of MIDI, it does not prove a fader move reaches the Core.
    expected for two independent Core connections) and neither path
    crashes, freezes, or desyncs from the Core's actual value.
 
+### Test 11 — Change the UCI port from the Configurator
+
+**What:** Confirms the Network panel's port field validates input, saves it
+to `config.json`, and the app actually listens on the new port after a
+restart.
+
+**How to test:**
+1. Open **Tray → Configure Mappings…** and expand the **Network** panel.
+2. Change the **Port** field to an unused port (e.g. `3005`) and click **Save**.
+3. Confirm the hint reads "Port saved — restart required to apply" and a
+   **Restart Now** button appears.
+4. Try an invalid value (e.g. `70000` or `abc`) — confirm it's rejected with
+   an inline error and `config.json` is unchanged.
+5. Click **Restart Now** (or quit and relaunch manually).
+6. After relaunch, confirm the tray's `UCI:` line and the Network panel's
+   Local/LAN URLs now show the new port, and `http://localhost:3005/foh-uci`
+   loads the mixer page.
+
+**Pass:** Valid ports save and apply after restart; invalid ports are
+rejected without touching `config.json`.
+
 ---
 
 ## Troubleshooting

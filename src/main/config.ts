@@ -45,6 +45,10 @@ export interface Config {
   uci?: { enabled?: boolean; port?: number }
 }
 
+export function isValidPort(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= 65535
+}
+
 function stripComments(text: string): string {
   // Strip // line comments, then trailing commas before ] or }
   // (JSONC-style — lets us freely comment/uncomment entries without managing commas)

@@ -316,7 +316,7 @@ The app also serves the FOH mixer web UI and relays browser WebSocket traffic to
 - The LAN URL shown in **Tray → UCI** — also copyable via **Tray → Copy UCI Link**
 - The Configurator's **Network** panel (**Configure Mappings… → Network — UCI Web Server**), which shows both the local and LAN URLs with their own Copy buttons
 
-**Config:** controlled by the `uci.enabled` and `uci.port` keys in `config.json` (see `src/main/config.ts`) — `enabled` defaults to `true`, `port` defaults to `3001`. As with other config changes, restart the app to apply changes to these keys.
+**Config:** controlled by the `uci.enabled` and `uci.port` keys in `config.json` (see `src/main/config.ts`) — `enabled` defaults to `true`, `port` defaults to `3001`. Both can also be set from the Configurator's **Network** panel (**Configure Mappings… → Network — Q-SYS & UCI**) — after changing the port, click **Restart Now** to apply it. If you're opening a firewall rule for this app, the UCI port is the one to allow.
 
 **Network caveat:** this works over the same WiFi network only. If the venue network has AP/client isolation enabled, devices on the same SSID can't reach each other — that's a network configuration issue, not an app bug.
 

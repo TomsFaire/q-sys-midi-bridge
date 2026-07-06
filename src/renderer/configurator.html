@@ -288,6 +288,10 @@
         <input type="checkbox" id="uci-enabled-toggle">
         Enabled
       </label>
+      <span class="net-label" style="width:auto;margin-left:14px">Port</span>
+      <input type="number" id="uci-port-input" min="1" max="65535" step="1" style="width:80px">
+      <button class="btn btn-ghost" id="uci-port-save-btn">Save</button>
+      <button class="btn btn-warn hidden" id="uci-restart-btn">Restart Now</button>
     </div>
     <div class="net-hint" id="net-hint"></div>
   </div>
@@ -743,6 +747,7 @@ async function initNetwork() {
       lanCopyBtn.disabled = true
     }
     toggle.checked = info.uciEnabled
+    document.getElementById('uci-port-input').value = info.uciPort
   } catch (e) {
     localCode.textContent = 'Error: ' + e.message
     lanCode.textContent = 'Error: ' + e.message
@@ -798,6 +803,26 @@ document.getElementById('uci-enabled-toggle').addEventListener('change', async e
     hint.textContent = 'Error: ' + err.message
     e.target.checked = !e.target.checked
   }
+})
+
+document.getElementById('uci-port-save-btn').addEventListener('click', async () => {
+  const hint = document.getElementById('net-hint')
+  const portInput = document.getElementById('uci-port-input')
+  const restartBtn = document.getElementById('uci-restart-btn')
+  const port = parseInt(portInput.value, 10)
+  try {
+    await ipcRenderer.invoke('cfg:set-uci-port', port)
+    hint.textContent = 'Port saved — restart required to apply'
+    hint.style.color = 'var(--text-dim)'
+    restartBtn.classList.remove('hidden')
+  } catch (err) {
+    hint.textContent = 'Error: ' + err.message
+    hint.style.color = 'var(--red)'
+  }
+})
+
+document.getElementById('uci-restart-btn').addEventListener('click', () => {
+  ipcRenderer.invoke('cfg:restart-app')
 })
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

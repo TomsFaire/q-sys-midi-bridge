@@ -7,6 +7,7 @@
     "start": "npm run build && electron .",
     "build": "tsc",
     "watch": "tsc --watch",
+    "test": "npm run build && node --test dist/main/**/*.test.js",
     "rebuild-midi": "electron-rebuild -f -w @julusian/midi",
     "sync-uci": "node -e \"const fs=require('fs'),p=require('path');const root=process.cwd();const src=process.env.FOH_UCI_SRC||p.join(root,'../../Q-SYS/General/foh-uci.html');const dest=p.join(root,'assets/uci/foh-uci.html');fs.mkdirSync(p.dirname(dest),{recursive:true});fs.copyFileSync(src,dest);console.log('Synced UCI from '+src+' -> '+dest)\"",
     "package": "npm run build && electron-builder --mac --publish never"
