@@ -443,12 +443,35 @@ const QRC = (() => {
     flex-direction: column-reverse;
     gap: 1px;
     align-self: stretch;
+    position: relative;
   }
   .vu-seg {
     flex: 1;
     border-radius: 1px;
     background: var(--vu-off);
     max-height: 6px;
+  }
+  .vu-tick {
+    position: absolute;
+    left: -3px;
+    width: 6px;
+    height: 1px;
+    background: var(--border);
+    pointer-events: none;
+  }
+  .vu-tick-zero {
+    background: var(--vu-clip);
+    height: 2px;
+  }
+  .vu-tick-label {
+    position: absolute;
+    left: 8px;
+    font-size: 7px;
+    line-height: 1;
+    color: var(--vu-clip);
+    font-weight: 700;
+    transform: translateY(50%);
+    pointer-events: none;
   }
 
   /* dB readout */
@@ -1528,6 +1551,28 @@ function dbToSegments(db) {
   const clamped = Math.max(VU_MIN_DB, Math.min(VU_MAX_DB, db));
   return Math.round(((clamped - VU_MIN_DB) / (VU_MAX_DB - VU_MIN_DB)) * VU_SEGS);
 }
+// Fraction (0..1) of meter height for a given dB value, for static tick placement.
+function dbToVuFrac(db) {
+  const clamped = Math.max(VU_MIN_DB, Math.min(VU_MAX_DB, db));
+  return (clamped - VU_MIN_DB) / (VU_MAX_DB - VU_MIN_DB);
+}
+// Appends static dB tick marks to a VU meter container. dbValues: e.g. [0, -6, -20, -40].
+// showZeroLabel: whether to add a "0" text label at the 0dB tick.
+function addVuTicks(vuEl, dbValues, showZeroLabel) {
+  dbValues.forEach(db => {
+    const tick = document.createElement('div');
+    tick.className = db === 0 ? 'vu-tick vu-tick-zero' : 'vu-tick';
+    tick.style.bottom = (dbToVuFrac(db) * 100) + '%';
+    vuEl.appendChild(tick);
+  });
+  if (showZeroLabel) {
+    const label = document.createElement('div');
+    label.className = 'vu-tick-label';
+    label.style.bottom = (dbToVuFrac(0) * 100) + '%';
+    label.textContent = '0';
+    vuEl.appendChild(label);
+  }
+}
 
 // ── Build sends bar ────────────────────────────────────────────────────────────
 function buildSendsBar() {
@@ -1666,6 +1711,7 @@ function buildStrips(bank) {
       seg.className = 'vu-seg';
       vu.appendChild(seg);
     }
+    addVuTicks(vu, [0, -6, -20, -40], true);
     faderVuRow.appendChild(vu);
 
     strip.appendChild(faderVuRow);
