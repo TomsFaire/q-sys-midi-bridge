@@ -878,7 +878,7 @@ const QRC = (() => {
   .meters-group {
     display: flex;
     align-items: stretch;
-    gap: 2px;
+    gap: 16px;
     flex: 1 1 0;
     min-height: 0;
   }
@@ -908,7 +908,7 @@ const QRC = (() => {
   }
 
   .meter-col-vu {
-    width: 5px;
+    width: 16px;
     display: flex;
     flex-direction: column-reverse;
     gap: 1px;
@@ -1560,12 +1560,15 @@ function formatDb(db) {
   return (db > 0 ? '+' : '') + db.toFixed(1) + ' dB';
 }
 
-// ── VU dB → segment index (20 segments, −60 to +10 dB) ───────────────────────
+// ── VU dB → segment index (20 segments, −60 to +20 dB) ───────────────────────
 const VU_SEGS   = 20;
 const VU_MIN_DB = -60;
-const VU_MAX_DB = 10;
+const VU_MAX_DB = 20;
 const VU_MID_DB = -6;   // amber starts here
 const VU_CLIP_DB = 0;   // red starts here
+// Shared dB values marked on every VU meter's tick guide: scale ceiling, unity,
+// amber threshold, two lower reference points, then the scale floor.
+const VU_TICK_DB_VALUES = [VU_MAX_DB, 0, VU_MID_DB, -20, -40, VU_MIN_DB];
 function dbToSegments(db) {
   const clamped = Math.max(VU_MIN_DB, Math.min(VU_MAX_DB, db));
   return Math.round(((clamped - VU_MIN_DB) / (VU_MAX_DB - VU_MIN_DB)) * VU_SEGS);
@@ -1575,8 +1578,8 @@ function dbToVuFrac(db) {
   const clamped = Math.max(VU_MIN_DB, Math.min(VU_MAX_DB, db));
   return (clamped - VU_MIN_DB) / (VU_MAX_DB - VU_MIN_DB);
 }
-// Appends static dB tick marks to a VU meter container. dbValues: e.g. [0, -6, -20, -40].
-// showZeroLabel: whether to add a "0" text label at the 0dB tick.
+// Appends static dB tick marks to a VU meter container. dbValues: e.g. VU_TICK_DB_VALUES.
+// showLabels: whether to add a text label (the dB number) at every tick.
 function addVuTicks(vuEl, dbValues, showLabels) {
   dbValues.forEach(db => {
     const tick = document.createElement('div');
@@ -1730,7 +1733,7 @@ function buildStrips(bank) {
       seg.className = 'vu-seg';
       vu.appendChild(seg);
     }
-    addVuTicks(vu, [0, -6, -20, -40], true);
+    addVuTicks(vu, VU_TICK_DB_VALUES, true);
     faderVuRow.appendChild(vu);
 
     strip.appendChild(faderVuRow);
@@ -2171,7 +2174,7 @@ function buildBusStrips() {
       seg.className = 'vu-seg';
       vu.appendChild(seg);
     }
-    addVuTicks(vu, [0, -6, -20, -40], true);
+    addVuTicks(vu, VU_TICK_DB_VALUES, true);
     faderVuRow.appendChild(vu);
     strip.appendChild(faderVuRow);
 
@@ -2415,7 +2418,7 @@ function buildOutputStrips() {
     const vu = document.createElement('div');
     vu.className = 'vu-col'; vu.id = 'out-vu-' + stripDef.id;
     for (let s = 0; s < VU_SEGS; s++) { const seg = document.createElement('div'); seg.className = 'vu-seg'; vu.appendChild(seg); }
-    addVuTicks(vu, [0, -6, -20, -40], true);
+    addVuTicks(vu, VU_TICK_DB_VALUES, true);
     faderVuRow.appendChild(vu);
     strip.appendChild(faderVuRow);
 
@@ -3248,7 +3251,7 @@ function buildDrawerContent() {
           seg.className = 'vu-seg';
           vu.appendChild(seg);
         }
-        addVuTicks(vu, [0], false);
+        addVuTicks(vu, VU_TICK_DB_VALUES, true);
         barsDiv.appendChild(vu);
       });
 
