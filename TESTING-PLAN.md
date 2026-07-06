@@ -265,6 +265,38 @@ that the Core at the configured host/port is actually reachable
 browser client, so a Core that's unreachable/rebooting will strand *all*
 open relay connections, not just the MIDI bridge's.
 
+### Test 12 — Mappings API smoke test (curl)
+
+**What:** Confirms the new `/api/mappings/*` and `/api/qsys/*` routes are
+wired up correctly before the browser page (Test 13) exists to exercise them.
+
+**How to test** (run with the app started and a mappings password already
+set via Configurator → Network → Mappings Page):
+1. Confirm unauthenticated access is rejected:
+   ```bash
+   curl -i http://localhost:3001/api/mappings
+   ```
+   Expect `401` and `{"error":"Not authenticated"}`.
+2. Log in and save the session cookie:
+   ```bash
+   curl -i -c /tmp/mqb-cookies.txt -X POST http://localhost:3001/api/mappings/login \
+     -H 'Content-Type: application/json' -d '{"password":"<your password>"}'
+   ```
+   Expect `200` and a `Set-Cookie` header.
+3. Fetch mappings using the saved cookie:
+   ```bash
+   curl -i -b /tmp/mqb-cookies.txt http://localhost:3001/api/mappings
+   ```
+   Expect `200` with `{"physicalControls": [...], "mappings": [...]}`.
+4. Try a wrong password:
+   ```bash
+   curl -i -X POST http://localhost:3001/api/mappings/login \
+     -H 'Content-Type: application/json' -d '{"password":"definitely-wrong"}'
+   ```
+   Expect `401` and `{"error":"Incorrect password"}`.
+
+**Pass:** All four responses match the expected status/body shown above.
+
 ### Test 10 — Manual-only: physical + real-device tests
 
 **These three cannot be automated or faked from this Mac — they need a
