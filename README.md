@@ -322,6 +322,28 @@ The app also serves the FOH mixer web UI and relays browser WebSocket traffic to
 
 ---
 
+## Browser-based MIDI mappings
+
+The MIDI-to-Q-Sys mapping table (the same data the desktop **Configure
+Mappings** window edits) is also reachable from any browser on the LAN, so
+you don't need physical or remote-desktop access to the Mac to remap a
+control.
+
+**First-time setup:** open **Configure Mappings… → Network** panel and set
+a **Mappings Page** password — the page won't allow access until one is
+set.
+
+**Access it at:** `http://<lan-ip-or-localhost>:<port>/mappings` (same host
+and port as the FOH UCI). Enter the password to sign in; the session lasts
+24 hours per browser.
+
+The page has the same capabilities as the desktop Configurator: assign
+Q-Sys components/controls to physical MIDImix controls, and **Save** or
+**Save & Apply** (applies live, no restart). Component/control lists are
+fetched live from Q-Sys, same as the desktop version.
+
+---
+
 ## Tray menu
 
 Click the menu bar icon to see:

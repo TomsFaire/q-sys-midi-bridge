@@ -297,6 +297,32 @@ set via Configurator → Network → Mappings Page):
 
 **Pass:** All four responses match the expected status/body shown above.
 
+### Test 13 — Manage MIDI mappings from a browser
+
+**What:** End-to-end check of the browser-based mappings page — confirms it
+can be reached from another device, requires the password, and edits
+actually reach Q-Sys the same way the desktop Configurator's Save & Apply
+does.
+
+**How to test:**
+1. In the Configurator's Network panel, set a Mappings Page password if you
+   haven't already (Test 12 setup).
+2. From a phone/tablet/laptop on the same WiFi as the bridge Mac, open
+   `http://<lan-ip>:<port>/mappings` (same LAN IP shown in Tray → UCI).
+3. Confirm a login form appears; try a wrong password (rejected with an
+   inline error), then the correct one (table loads).
+4. Assign a component/control to an unassigned physical control, click
+   **Save & Apply**, and confirm the change actually reaches Q-Sys (e.g.
+   move the mapped MIDImix control and watch it respond, or check the value
+   in Q-Sys Designer).
+5. Reload the page — confirm you're still signed in (session cookie
+   persists) and the new assignment is still shown.
+6. Open the same URL in a private/incognito window — confirm it asks for
+   the password again (no shared session across browser profiles).
+
+**Pass:** Login gate works, edits save and apply live, and the session
+persists across reloads but not across separate browser profiles.
+
 ### Test 10 — Manual-only: physical + real-device tests
 
 **These three cannot be automated or faked from this Mac — they need a
