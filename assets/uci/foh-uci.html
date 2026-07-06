@@ -904,6 +904,7 @@ const QRC = (() => {
     gap: 1px;
     flex: 1 1 0;
     min-height: 0;
+    position: relative;
   }
 
   /* Override .vu-seg max-height for drawer (strip uses max-height:6px) */
@@ -3237,6 +3238,7 @@ function buildDrawerContent() {
           seg.className = 'vu-seg';
           vu.appendChild(seg);
         }
+        addVuTicks(vu, [0], false);
         barsDiv.appendChild(vu);
       });
 
