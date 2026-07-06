@@ -1729,10 +1729,7 @@ function wireFader(wrap, handle, ch) {
         }]);
     } else {
       chState[ch.id].gain = db;
-      QRC.component.set('Input.Mixer', [{
-        Name: `input.${ch.mixerSlot}.gain`,
-        Value: db
-      }]);
+      QRC.component.set(ch.labelPin + '.Gain', [{ Name: 'gain', Value: db }]);
     }
   }
 
@@ -1754,10 +1751,7 @@ function wireFader(wrap, handle, ch) {
       }]);
     } else {
       chState[ch.id].gain = db;
-      QRC.component.set('Input.Mixer', [{
-        Name: `input.${ch.mixerSlot}.gain`,
-        Value: db
-      }]);
+      QRC.component.set(ch.labelPin + '.Gain', [{ Name: 'gain', Value: db }]);
     }
   });
 }
@@ -1840,30 +1834,31 @@ function setConnStatus(state, msg) {
 function loadInitialState() {
   const allChannels = [...BANKS.mics, ...BANKS.stereo];
 
-  // Load fader + mute state for all 12 input slots
+  // Load mute state (mixer) + gain (pre-effects Gain block) for all 12 input slots
   allChannels.forEach(ch => {
     QRC.component.get('Input.Mixer',
-      [`input.${ch.mixerSlot}.gain`, `input.${ch.mixerSlot}.mute`],
+      [`input.${ch.mixerSlot}.mute`],
       function(controls) {
         controls.forEach(c => {
-          if (c.Name.endsWith('.gain')) {
-            chState[ch.id].gain = c.Value;
-          } else if (c.Name.endsWith('.mute')) {
-            chState[ch.id].mute = !!c.Value;
-          }
+          if (c.Name.endsWith('.mute')) chState[ch.id].mute = !!c.Value;
         });
-        // Refresh visible strip if in current bank
         const strip = document.getElementById('strip-' + ch.id);
         if (strip) {
           strip.classList.toggle('muted', chState[ch.id].mute);
           strip.querySelector('.mute-btn').textContent = chState[ch.id].mute ? 'MUTED' : 'MUTE';
-          if (!sendsMode) {
-            setFaderPos(strip, dbToPos(chState[ch.id].gain));
-            strip.querySelector('.db-readout').textContent = formatDb(chState[ch.id].gain);
-          }
         }
       }
     );
+    QRC.component.get(ch.labelPin + '.Gain', ['gain'], function(controls) {
+      controls.forEach(c => {
+        if (c.Name === 'gain') chState[ch.id].gain = c.Value;
+      });
+      const strip = document.getElementById('strip-' + ch.id);
+      if (strip && !sendsMode) {
+        setFaderPos(strip, dbToPos(chState[ch.id].gain));
+        strip.querySelector('.db-readout').textContent = formatDb(chState[ch.id].gain);
+      }
+    });
   });
 
   // Load labels
@@ -2134,7 +2129,7 @@ function commitBusFader(bus, db) {
     QRC.component.set('Bus.Mixer', [{ Name: `input.${bus.mixerSlot}.output.${BUS_OUTPUTS[busSendsBusIdx].outSlot}.gain`, Value: db }]);
   } else {
     busState[bus.id].gain = db;
-    QRC.component.set('Bus.Mixer', [{ Name: `input.${bus.mixerSlot}.gain`, Value: db }]);
+    QRC.component.set(bus.labelPin + '.Gain', [{ Name: 'gain', Value: db }]);
   }
 }
 
@@ -2188,19 +2183,24 @@ document.getElementById('buses-sends-exit').addEventListener('click', () => {
 
 function loadBusState() {
   BUS_STRIPS.forEach(bus => {
-    QRC.component.get('Bus.Mixer', [`input.${bus.mixerSlot}.gain`, `input.${bus.mixerSlot}.mute`], function(controls) {
+    QRC.component.get('Bus.Mixer', [`input.${bus.mixerSlot}.mute`], function(controls) {
       controls.forEach(c => {
-        if (c.Name.endsWith('.gain')) busState[bus.id].gain = c.Value;
-        else if (c.Name.endsWith('.mute')) busState[bus.id].mute = !!c.Value;
+        if (c.Name.endsWith('.mute')) busState[bus.id].mute = !!c.Value;
       });
       const strip = document.getElementById('busstrip-' + bus.id);
       if (strip) {
         strip.classList.toggle('muted', busState[bus.id].mute);
         strip.querySelector('.mute-btn').textContent = busState[bus.id].mute ? 'MUTED' : 'MUTE';
-        if (!busSendsMode) {
-          setFaderPos(strip, dbToPos(busState[bus.id].gain));
-          strip.querySelector('.db-readout').textContent = formatDb(busState[bus.id].gain);
-        }
+      }
+    });
+    QRC.component.get(bus.labelPin + '.Gain', ['gain'], function(controls) {
+      controls.forEach(c => {
+        if (c.Name === 'gain') busState[bus.id].gain = c.Value;
+      });
+      const strip = document.getElementById('busstrip-' + bus.id);
+      if (strip && !busSendsMode) {
+        setFaderPos(strip, dbToPos(busState[bus.id].gain));
+        strip.querySelector('.db-readout').textContent = formatDb(busState[bus.id].gain);
       }
     });
   });
