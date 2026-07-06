@@ -228,7 +228,7 @@ and reflects live Core state; tray's `UCI:` line matches (URL shown, no
 
 **Note:** This is same-machine verification only — it proves the HTTP/WS
 server and Core relay work from this Mac's own network stack. It does **not**
-prove a separate device on the venue WiFi can reach it (see Test 10 —
+prove a separate device on the venue WiFi can reach it (see Test 12 —
 manual-only).
 
 ### Test 9 — Concurrency check
@@ -265,10 +265,10 @@ that the Core at the configured host/port is actually reachable
 browser client, so a Core that's unreachable/rebooting will strand *all*
 open relay connections, not just the MIDI bridge's.
 
-### Test 12 — Mappings API smoke test (curl)
+### Test 10 — Mappings API smoke test (curl)
 
 **What:** Confirms the new `/api/mappings/*` and `/api/qsys/*` routes are
-wired up correctly before the browser page (Test 13) exists to exercise them.
+wired up correctly before the browser page (Test 11) exists to exercise them.
 
 **How to test** (run with the app started and a mappings password already
 set via Configurator → Network → Mappings Page):
@@ -297,7 +297,7 @@ set via Configurator → Network → Mappings Page):
 
 **Pass:** All four responses match the expected status/body shown above.
 
-### Test 13 — Manage MIDI mappings from a browser
+### Test 11 — Manage MIDI mappings from a browser
 
 **What:** End-to-end check of the browser-based mappings page — confirms it
 can be reached from another device, requires the password, and edits
@@ -306,7 +306,7 @@ does.
 
 **How to test:**
 1. In the Configurator's Network panel, set a Mappings Page password if you
-   haven't already (Test 12 setup).
+   haven't already (Test 10 setup).
 2. From a phone/tablet/laptop on the same WiFi as the bridge Mac, open
    `http://<lan-ip>:<port>/mappings` (same LAN IP shown in Tray → UCI).
 3. Confirm a login form appears; try a wrong password (rejected with an
@@ -323,7 +323,7 @@ does.
 **Pass:** Login gate works, edits save and apply live, and the session
 persists across reloads but not across separate browser profiles.
 
-### Test 10 — Manual-only: physical + real-device tests
+### Test 12 — Manual-only: physical + real-device tests
 
 **These three cannot be automated or faked from this Mac — they need a
 human with hands on the hardware and/or a second device on the venue WiFi.**
@@ -376,7 +376,7 @@ independent of MIDI, it does not prove a fader move reaches the Core.
    expected for two independent Core connections) and neither path
    crashes, freezes, or desyncs from the Core's actual value.
 
-### Test 11 — Change the UCI port from the Configurator
+### Test 13 — Change the UCI port from the Configurator
 
 **What:** Confirms the Network panel's port field validates input, saves it
 to `config.json`, and the app actually listens on the new port after a

@@ -120,7 +120,7 @@ export class MappingsHttpHandler {
           return
         }
         const token = this.sessions.create()
-        res.setHeader('Set-Cookie', `${SESSION_COOKIE}=${token}; HttpOnly; Path=/; Max-Age=86400`)
+        res.setHeader('Set-Cookie', `${SESSION_COOKIE}=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=86400`)
         this.sendJson(res, 200, { ok: true })
       }).catch(() => this.sendJson(res, 400, { error: 'Invalid request body' }))
       return true
