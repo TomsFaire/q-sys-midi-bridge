@@ -445,6 +445,14 @@ const QRC = (() => {
     align-self: stretch;
     position: relative;
   }
+  .vu-col {
+    width: 10px;
+    display: flex;
+    flex-direction: column-reverse;
+    gap: 1px;
+    align-self: stretch;
+    position: relative;
+  }
   .vu-seg {
     flex: 1;
     border-radius: 1px;
@@ -2152,6 +2160,7 @@ function buildBusStrips() {
       seg.className = 'vu-seg';
       vu.appendChild(seg);
     }
+    addVuTicks(vu, [0, -6, -20, -40], true);
     faderVuRow.appendChild(vu);
     strip.appendChild(faderVuRow);
 
@@ -2395,6 +2404,7 @@ function buildOutputStrips() {
     const vu = document.createElement('div');
     vu.className = 'vu-col'; vu.id = 'out-vu-' + stripDef.id;
     for (let s = 0; s < VU_SEGS; s++) { const seg = document.createElement('div'); seg.className = 'vu-seg'; vu.appendChild(seg); }
+    addVuTicks(vu, [0, -6, -20, -40], true);
     faderVuRow.appendChild(vu);
     strip.appendChild(faderVuRow);
 
