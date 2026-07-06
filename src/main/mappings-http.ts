@@ -179,6 +179,10 @@ export class MappingsHttpHandler {
 
     const controlsMatch = pathname.match(/^\/api\/qsys\/components\/([^/]+)\/controls$/)
     if (controlsMatch && req.method === 'GET') {
+      if (!this.qrc?.isConnected) {
+        this.sendJson(res, 503, { error: 'Q-SYS not connected — check host in config.json' })
+        return true
+      }
       const componentName = decodeURIComponent(controlsMatch[1])
       getComponentControls(this.qrc, componentName)
         .then((controls) => this.sendJson(res, 200, { controls }))
