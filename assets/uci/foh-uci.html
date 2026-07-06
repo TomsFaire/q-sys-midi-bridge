@@ -209,6 +209,21 @@ const QRC = (() => {
     background: var(--bg);
   }
   .tab-btn.stub { opacity: 0.4; cursor: default; }
+  .fullscreen-btn {
+    margin-left: auto;
+    padding: 6px 14px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: transparent;
+    color: var(--subdued);
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+  }
+  .fullscreen-btn.active {
+    color: var(--text);
+    background: var(--bg);
+  }
 
   /* ── Page containers ──────────────────────────────────────────── */
   .page { display: none; flex: 1; flex-direction: column; overflow: hidden; }
@@ -885,6 +900,7 @@ const QRC = (() => {
   <button class="tab-btn"        data-tab="outputs">Outputs</button>
   <button class="tab-btn"        data-tab="routing">Routing</button>
   <button class="tab-btn"        data-tab="patch">Patch</button>
+  <button id="fullscreen-btn" class="fullscreen-btn">Full Screen</button>
 </div>
 
 <!-- INPUTS page -->
@@ -1806,6 +1822,32 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
     document.getElementById('page-' + btn.dataset.tab).classList.add('active');
   });
 });
+
+// ── Fullscreen toggle ──────────────────────────────────────────────────────────
+function isFullscreen() {
+  return !!(document.fullscreenElement || document.webkitFullscreenElement);
+}
+function enterFullscreen() {
+  const el = document.documentElement;
+  if (el.requestFullscreen) el.requestFullscreen();
+  else if (el.webkitRequestFullscreen) el.webkitRequestFullscreen();
+}
+function exitFullscreen() {
+  if (document.exitFullscreen) document.exitFullscreen();
+  else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
+}
+const fullscreenBtn = document.getElementById('fullscreen-btn');
+fullscreenBtn.addEventListener('click', () => {
+  if (isFullscreen()) exitFullscreen();
+  else enterFullscreen();
+});
+function refreshFullscreenBtn() {
+  const active = isFullscreen();
+  fullscreenBtn.classList.toggle('active', active);
+  fullscreenBtn.textContent = active ? 'Exit Full Screen' : 'Full Screen';
+}
+document.addEventListener('fullscreenchange', refreshFullscreenBtn);
+document.addEventListener('webkitfullscreenchange', refreshFullscreenBtn);
 
 // ── Bank switching ─────────────────────────────────────────────────────────────
 function switchBank(bank) {
