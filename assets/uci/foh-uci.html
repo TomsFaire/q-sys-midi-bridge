@@ -437,20 +437,26 @@ const QRC = (() => {
   }
 
   /* VU meter (mono) */
+  /* height = VU_SEGS(20) * 6px max-height + 19 * 1px gaps — must match the
+     capped .vu-seg size below, so ticks (positioned as % of this box)
+     land on the actual rendered LED stack instead of the unused space
+     .vu-meter/.vu-col used to stretch into above it. */
   .vu-meter {
     width: 10px;
+    height: 139px;
     display: flex;
     flex-direction: column-reverse;
     gap: 1px;
-    align-self: stretch;
+    align-self: flex-end;
     position: relative;
   }
   .vu-col {
     width: 10px;
+    height: 139px;
     display: flex;
     flex-direction: column-reverse;
     gap: 1px;
-    align-self: stretch;
+    align-self: flex-end;
     position: relative;
   }
   .vu-seg {
@@ -476,10 +482,14 @@ const QRC = (() => {
     left: 8px;
     font-size: 7px;
     line-height: 1;
-    color: var(--vu-clip);
-    font-weight: 700;
+    color: var(--subdued);
     transform: translateY(50%);
     pointer-events: none;
+    white-space: nowrap;
+  }
+  .vu-tick-label-zero {
+    color: var(--vu-clip);
+    font-weight: 700;
   }
 
   /* dB readout */
@@ -1567,20 +1577,20 @@ function dbToVuFrac(db) {
 }
 // Appends static dB tick marks to a VU meter container. dbValues: e.g. [0, -6, -20, -40].
 // showZeroLabel: whether to add a "0" text label at the 0dB tick.
-function addVuTicks(vuEl, dbValues, showZeroLabel) {
+function addVuTicks(vuEl, dbValues, showLabels) {
   dbValues.forEach(db => {
     const tick = document.createElement('div');
     tick.className = db === 0 ? 'vu-tick vu-tick-zero' : 'vu-tick';
     tick.style.bottom = (dbToVuFrac(db) * 100) + '%';
     vuEl.appendChild(tick);
+    if (showLabels) {
+      const label = document.createElement('div');
+      label.className = db === 0 ? 'vu-tick-label vu-tick-label-zero' : 'vu-tick-label';
+      label.style.bottom = (dbToVuFrac(db) * 100) + '%';
+      label.textContent = String(db);
+      vuEl.appendChild(label);
+    }
   });
-  if (showZeroLabel) {
-    const label = document.createElement('div');
-    label.className = 'vu-tick-label';
-    label.style.bottom = (dbToVuFrac(0) * 100) + '%';
-    label.textContent = '0';
-    vuEl.appendChild(label);
-  }
 }
 
 // ── Build sends bar ────────────────────────────────────────────────────────────
