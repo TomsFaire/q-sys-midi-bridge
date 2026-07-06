@@ -293,6 +293,12 @@
       <button class="btn btn-ghost" id="uci-port-save-btn">Save</button>
       <button class="btn btn-warn hidden" id="uci-restart-btn">Restart Now</button>
     </div>
+    <div class="net-row">
+      <span class="net-label">Mappings Page</span>
+      <input type="password" id="mappings-password-input" placeholder="Set a password to enable /mappings" style="flex:1;max-width:200px">
+      <button class="btn btn-ghost" id="mappings-password-save-btn">Save</button>
+      <span id="mappings-password-status" style="font-size:11px;color:var(--text-dim)"></span>
+    </div>
     <div class="net-hint" id="net-hint"></div>
   </div>
 </details>
@@ -753,6 +759,12 @@ async function initNetwork() {
     lanCode.textContent = 'Error: ' + e.message
     lanCopyBtn.disabled = true
   }
+
+  try {
+    const hasPassword = await ipcRenderer.invoke('cfg:has-mappings-password')
+    document.getElementById('mappings-password-input').placeholder =
+      hasPassword ? 'Password set — enter a new one to change it' : 'Set a password to enable /mappings'
+  } catch { /* leave default placeholder */ }
 }
 
 document.getElementById('host-save-btn').addEventListener('click', async () => {
@@ -823,6 +835,21 @@ document.getElementById('uci-port-save-btn').addEventListener('click', async () 
 
 document.getElementById('uci-restart-btn').addEventListener('click', () => {
   ipcRenderer.invoke('cfg:restart-app')
+})
+
+document.getElementById('mappings-password-save-btn').addEventListener('click', async () => {
+  const input = document.getElementById('mappings-password-input')
+  const status = document.getElementById('mappings-password-status')
+  try {
+    await ipcRenderer.invoke('cfg:set-mappings-password', input.value)
+    status.textContent = '✓ Saved'
+    status.style.color = 'var(--green)'
+    input.value = ''
+    input.placeholder = 'Password set — enter a new one to change it'
+  } catch (err) {
+    status.textContent = '✗ ' + err.message
+    status.style.color = 'var(--red)'
+  }
 })
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

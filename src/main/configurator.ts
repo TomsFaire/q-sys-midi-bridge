@@ -13,6 +13,7 @@ import { QrcClient } from './qrc-client.js'
 import { isValidPort, stripComments } from './config.js'
 import type { Mapping } from './config.js'
 import { getLanIPv4 } from './network.js'
+import { hashPassword } from './auth.js'
 import {
   PHYSICAL_CONTROLS,
   discoverComponents,
@@ -78,11 +79,11 @@ export class Configurator {
     return JSON.parse(clean) as Record<string, unknown>
   }
 
-  private readUciConfig(): { enabled?: boolean; port?: number } {
+  private readUciConfig(): { enabled?: boolean; port?: number; mappingsPasswordHash?: string } {
     try {
       const raw = fs.readFileSync(this.configFilePath, 'utf-8')
       const config = this.parseConfig(raw)
-      return (config.uci as { enabled?: boolean; port?: number } | undefined) ?? {}
+      return (config.uci as { enabled?: boolean; port?: number; mappingsPasswordHash?: string } | undefined) ?? {}
     } catch {
       return {}
     }
@@ -198,5 +199,22 @@ export class Configurator {
       app.relaunch()
       app.exit(0)
     })
+
+    // ── Set the browser mappings-page password (hashed, plaintext never stored) ─
+    ipcMain.handle('cfg:set-mappings-password', (_event, password: string) => {
+      const trimmed = password.trim()
+      if (trimmed.length < 4) {
+        throw new Error('Password must be at least 4 characters')
+      }
+      const raw = fs.readFileSync(this.configFilePath, 'utf-8')
+      const config = this.parseConfig(raw)
+      const uci = (config.uci as Record<string, unknown> | undefined) ?? {}
+      uci.mappingsPasswordHash = hashPassword(trimmed)
+      config.uci = uci
+      fs.writeFileSync(this.configFilePath, JSON.stringify(config, null, 2), 'utf-8')
+    })
+
+    // ── Whether a mappings-page password has been set yet ───────────────────
+    ipcMain.handle('cfg:has-mappings-password', () => !!this.readUciConfig().mappingsPasswordHash)
   }
 }
