@@ -1574,9 +1574,14 @@ function dbToSegments(db) {
   return Math.round(((clamped - VU_MIN_DB) / (VU_MAX_DB - VU_MIN_DB)) * VU_SEGS);
 }
 // Fraction (0..1) of meter height for a given dB value, for static tick placement.
+// Snapped to the nearest segment boundary so ticks always land exactly on the
+// same grid the lit/unlit .vu-seg blocks render on — a raw continuous fraction
+// can fall mid-segment (e.g. -6dB sits at segment 13.5 of 20), which looks like
+// a second, subtly offset "boundary" next to the real one.
 function dbToVuFrac(db) {
   const clamped = Math.max(VU_MIN_DB, Math.min(VU_MAX_DB, db));
-  return (clamped - VU_MIN_DB) / (VU_MAX_DB - VU_MIN_DB);
+  const frac = (clamped - VU_MIN_DB) / (VU_MAX_DB - VU_MIN_DB);
+  return Math.round(frac * VU_SEGS) / VU_SEGS;
 }
 // Appends static dB tick marks to a VU meter container. dbValues: e.g. VU_TICK_DB_VALUES.
 // showLabels: whether to add a text label (the dB number) at every tick.
