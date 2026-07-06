@@ -209,6 +209,21 @@ const QRC = (() => {
     background: var(--bg);
   }
   .tab-btn.stub { opacity: 0.4; cursor: default; }
+  .fullscreen-btn {
+    margin-left: auto;
+    padding: 6px 14px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: transparent;
+    color: var(--subdued);
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+  }
+  .fullscreen-btn.active {
+    color: var(--text);
+    background: var(--bg);
+  }
 
   /* ── Page containers ──────────────────────────────────────────── */
   .page { display: none; flex: 1; flex-direction: column; overflow: hidden; }
@@ -422,18 +437,59 @@ const QRC = (() => {
   }
 
   /* VU meter (mono) */
+  /* height = VU_SEGS(20) * 6px max-height + 19 * 1px gaps — must match the
+     capped .vu-seg size below, so ticks (positioned as % of this box)
+     land on the actual rendered LED stack instead of the unused space
+     .vu-meter/.vu-col used to stretch into above it. */
   .vu-meter {
     width: 10px;
+    height: 139px;
     display: flex;
     flex-direction: column-reverse;
     gap: 1px;
-    align-self: stretch;
+    align-self: flex-end;
+    position: relative;
+  }
+  .vu-col {
+    width: 10px;
+    height: 139px;
+    display: flex;
+    flex-direction: column-reverse;
+    gap: 1px;
+    align-self: flex-end;
+    position: relative;
   }
   .vu-seg {
     flex: 1;
     border-radius: 1px;
     background: var(--vu-off);
     max-height: 6px;
+  }
+  .vu-tick {
+    position: absolute;
+    left: -3px;
+    width: 6px;
+    height: 1px;
+    background: var(--border);
+    pointer-events: none;
+  }
+  .vu-tick-zero {
+    background: var(--vu-clip);
+    height: 2px;
+  }
+  .vu-tick-label {
+    position: absolute;
+    left: 8px;
+    font-size: 7px;
+    line-height: 1;
+    color: var(--subdued);
+    transform: translateY(50%);
+    pointer-events: none;
+    white-space: nowrap;
+  }
+  .vu-tick-label-zero {
+    color: var(--vu-clip);
+    font-weight: 700;
   }
 
   /* dB readout */
@@ -822,7 +878,7 @@ const QRC = (() => {
   .meters-group {
     display: flex;
     align-items: stretch;
-    gap: 2px;
+    gap: 16px;
     flex: 1 1 0;
     min-height: 0;
   }
@@ -852,12 +908,13 @@ const QRC = (() => {
   }
 
   .meter-col-vu {
-    width: 5px;
+    width: 16px;
     display: flex;
     flex-direction: column-reverse;
     gap: 1px;
     flex: 1 1 0;
     min-height: 0;
+    position: relative;
   }
 
   /* Override .vu-seg max-height for drawer (strip uses max-height:6px) */
@@ -885,6 +942,7 @@ const QRC = (() => {
   <button class="tab-btn"        data-tab="outputs">Outputs</button>
   <button class="tab-btn"        data-tab="routing">Routing</button>
   <button class="tab-btn"        data-tab="patch">Patch</button>
+  <button id="fullscreen-btn" class="fullscreen-btn">Full Screen</button>
 </div>
 
 <!-- INPUTS page -->
@@ -1502,15 +1560,40 @@ function formatDb(db) {
   return (db > 0 ? '+' : '') + db.toFixed(1) + ' dB';
 }
 
-// ── VU dB → segment index (20 segments, −60 to +10 dB) ───────────────────────
+// ── VU dB → segment index (20 segments, −60 to +20 dB) ───────────────────────
 const VU_SEGS   = 20;
 const VU_MIN_DB = -60;
-const VU_MAX_DB = 10;
+const VU_MAX_DB = 20;
 const VU_MID_DB = -6;   // amber starts here
 const VU_CLIP_DB = 0;   // red starts here
+// Shared dB values marked on every VU meter's tick guide: scale ceiling, unity,
+// amber threshold, two lower reference points, then the scale floor.
+const VU_TICK_DB_VALUES = [VU_MAX_DB, 0, VU_MID_DB, -20, -40, VU_MIN_DB];
 function dbToSegments(db) {
   const clamped = Math.max(VU_MIN_DB, Math.min(VU_MAX_DB, db));
   return Math.round(((clamped - VU_MIN_DB) / (VU_MAX_DB - VU_MIN_DB)) * VU_SEGS);
+}
+// Fraction (0..1) of meter height for a given dB value, for static tick placement.
+function dbToVuFrac(db) {
+  const clamped = Math.max(VU_MIN_DB, Math.min(VU_MAX_DB, db));
+  return (clamped - VU_MIN_DB) / (VU_MAX_DB - VU_MIN_DB);
+}
+// Appends static dB tick marks to a VU meter container. dbValues: e.g. VU_TICK_DB_VALUES.
+// showLabels: whether to add a text label (the dB number) at every tick.
+function addVuTicks(vuEl, dbValues, showLabels) {
+  dbValues.forEach(db => {
+    const tick = document.createElement('div');
+    tick.className = db === 0 ? 'vu-tick vu-tick-zero' : 'vu-tick';
+    tick.style.bottom = (dbToVuFrac(db) * 100) + '%';
+    vuEl.appendChild(tick);
+    if (showLabels) {
+      const label = document.createElement('div');
+      label.className = db === 0 ? 'vu-tick-label vu-tick-label-zero' : 'vu-tick-label';
+      label.style.bottom = (dbToVuFrac(db) * 100) + '%';
+      label.textContent = String(db);
+      vuEl.appendChild(label);
+    }
+  });
 }
 
 // ── Build sends bar ────────────────────────────────────────────────────────────
@@ -1650,6 +1733,7 @@ function buildStrips(bank) {
       seg.className = 'vu-seg';
       vu.appendChild(seg);
     }
+    addVuTicks(vu, VU_TICK_DB_VALUES, true);
     faderVuRow.appendChild(vu);
 
     strip.appendChild(faderVuRow);
@@ -1806,6 +1890,32 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
     document.getElementById('page-' + btn.dataset.tab).classList.add('active');
   });
 });
+
+// ── Fullscreen toggle ──────────────────────────────────────────────────────────
+function isFullscreen() {
+  return !!(document.fullscreenElement || document.webkitFullscreenElement);
+}
+function enterFullscreen() {
+  const el = document.documentElement;
+  if (el.requestFullscreen) el.requestFullscreen();
+  else if (el.webkitRequestFullscreen) el.webkitRequestFullscreen();
+}
+function exitFullscreen() {
+  if (document.exitFullscreen) document.exitFullscreen();
+  else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
+}
+const fullscreenBtn = document.getElementById('fullscreen-btn');
+fullscreenBtn.addEventListener('click', () => {
+  if (isFullscreen()) exitFullscreen();
+  else enterFullscreen();
+});
+function refreshFullscreenBtn() {
+  const active = isFullscreen();
+  fullscreenBtn.classList.toggle('active', active);
+  fullscreenBtn.textContent = active ? 'Exit Full Screen' : 'Full Screen';
+}
+document.addEventListener('fullscreenchange', refreshFullscreenBtn);
+document.addEventListener('webkitfullscreenchange', refreshFullscreenBtn);
 
 // ── Bank switching ─────────────────────────────────────────────────────────────
 function switchBank(bank) {
@@ -2064,6 +2174,7 @@ function buildBusStrips() {
       seg.className = 'vu-seg';
       vu.appendChild(seg);
     }
+    addVuTicks(vu, VU_TICK_DB_VALUES, true);
     faderVuRow.appendChild(vu);
     strip.appendChild(faderVuRow);
 
@@ -2307,6 +2418,7 @@ function buildOutputStrips() {
     const vu = document.createElement('div');
     vu.className = 'vu-col'; vu.id = 'out-vu-' + stripDef.id;
     for (let s = 0; s < VU_SEGS; s++) { const seg = document.createElement('div'); seg.className = 'vu-seg'; vu.appendChild(seg); }
+    addVuTicks(vu, VU_TICK_DB_VALUES, true);
     faderVuRow.appendChild(vu);
     strip.appendChild(faderVuRow);
 
@@ -3139,6 +3251,7 @@ function buildDrawerContent() {
           seg.className = 'vu-seg';
           vu.appendChild(seg);
         }
+        addVuTicks(vu, VU_TICK_DB_VALUES, true);
         barsDiv.appendChild(vu);
       });
 
