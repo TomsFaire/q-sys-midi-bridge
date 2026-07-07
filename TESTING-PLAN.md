@@ -228,7 +228,7 @@ and reflects live Core state; tray's `UCI:` line matches (URL shown, no
 
 **Note:** This is same-machine verification only — it proves the HTTP/WS
 server and Core relay work from this Mac's own network stack. It does **not**
-prove a separate device on the venue WiFi can reach it (see Test 10 —
+prove a separate device on the venue WiFi can reach it (see Test 12 —
 manual-only).
 
 ### Test 9 — Concurrency check
@@ -265,7 +265,65 @@ that the Core at the configured host/port is actually reachable
 browser client, so a Core that's unreachable/rebooting will strand *all*
 open relay connections, not just the MIDI bridge's.
 
-### Test 10 — Manual-only: physical + real-device tests
+### Test 10 — Mappings API smoke test (curl)
+
+**What:** Confirms the new `/api/mappings/*` and `/api/qsys/*` routes are
+wired up correctly before the browser page (Test 11) exists to exercise them.
+
+**How to test** (run with the app started and a mappings password already
+set via Configurator → Network → Mappings Page):
+1. Confirm unauthenticated access is rejected:
+   ```bash
+   curl -i http://localhost:3001/api/mappings
+   ```
+   Expect `401` and `{"error":"Not authenticated"}`.
+2. Log in and save the session cookie:
+   ```bash
+   curl -i -c /tmp/mqb-cookies.txt -X POST http://localhost:3001/api/mappings/login \
+     -H 'Content-Type: application/json' -d '{"password":"<your password>"}'
+   ```
+   Expect `200` and a `Set-Cookie` header.
+3. Fetch mappings using the saved cookie:
+   ```bash
+   curl -i -b /tmp/mqb-cookies.txt http://localhost:3001/api/mappings
+   ```
+   Expect `200` with `{"physicalControls": [...], "mappings": [...]}`.
+4. Try a wrong password:
+   ```bash
+   curl -i -X POST http://localhost:3001/api/mappings/login \
+     -H 'Content-Type: application/json' -d '{"password":"definitely-wrong"}'
+   ```
+   Expect `401` and `{"error":"Incorrect password"}`.
+
+**Pass:** All four responses match the expected status/body shown above.
+
+### Test 11 — Manage MIDI mappings from a browser
+
+**What:** End-to-end check of the browser-based mappings page — confirms it
+can be reached from another device, requires the password, and edits
+actually reach Q-Sys the same way the desktop Configurator's Save & Apply
+does.
+
+**How to test:**
+1. In the Configurator's Network panel, set a Mappings Page password if you
+   haven't already (Test 10 setup).
+2. From a phone/tablet/laptop on the same WiFi as the bridge Mac, open
+   `http://<lan-ip>:<port>/mappings` (same LAN IP shown in Tray → UCI).
+3. Confirm a login form appears; try a wrong password (rejected with an
+   inline error), then the correct one (table loads).
+4. Assign a component/control to an unassigned physical control, click
+   **Save & Apply**, and confirm the change actually reaches Q-Sys (e.g.
+   move the mapped MIDImix control and watch it respond, or check the value
+   in Q-Sys Designer).
+5. Reload the page — confirm you're still signed in (session cookie
+   persists) and the new assignment is still shown.
+6. Open the same URL in a private/incognito window — confirm it asks for
+   the password again (no shared session across browser profiles).
+
+**Pass:** Login gate works, edits save and apply live, and the session
+persists across reloads but not across separate browser profiles.
+
+### Test 12 — Manual-only: physical + real-device tests
 
 **These three cannot be automated or faked from this Mac — they need a
 human with hands on the hardware and/or a second device on the venue WiFi.**
@@ -317,6 +375,27 @@ independent of MIDI, it does not prove a fader move reaches the Core.
 2. Confirm both converge on the same Core state (last write wins, as
    expected for two independent Core connections) and neither path
    crashes, freezes, or desyncs from the Core's actual value.
+
+### Test 13 — Change the UCI port from the Configurator
+
+**What:** Confirms the Network panel's port field validates input, saves it
+to `config.json`, and the app actually listens on the new port after a
+restart.
+
+**How to test:**
+1. Open **Tray → Configure Mappings…** and expand the **Network** panel.
+2. Change the **Port** field to an unused port (e.g. `3005`) and click **Save**.
+3. Confirm the hint reads "Port saved — restart required to apply" and a
+   **Restart Now** button appears.
+4. Try an invalid value (e.g. `70000` or `abc`) — confirm it's rejected with
+   an inline error and `config.json` is unchanged.
+5. Click **Restart Now** (or quit and relaunch manually).
+6. After relaunch, confirm the tray's `UCI:` line and the Network panel's
+   Local/LAN URLs now show the new port, and `http://localhost:3005/foh-uci`
+   loads the mixer page.
+
+**Pass:** Valid ports save and apply after restart; invalid ports are
+rejected without touching `config.json`.
 
 ---
 

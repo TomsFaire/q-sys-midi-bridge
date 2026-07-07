@@ -316,9 +316,31 @@ The app also serves the FOH mixer web UI and relays browser WebSocket traffic to
 - The LAN URL shown in **Tray → UCI** — also copyable via **Tray → Copy UCI Link**
 - The Configurator's **Network** panel (**Configure Mappings… → Network — UCI Web Server**), which shows both the local and LAN URLs with their own Copy buttons
 
-**Config:** controlled by the `uci.enabled` and `uci.port` keys in `config.json` (see `src/main/config.ts`) — `enabled` defaults to `true`, `port` defaults to `3001`. As with other config changes, restart the app to apply changes to these keys.
+**Config:** controlled by the `uci.enabled` and `uci.port` keys in `config.json` (see `src/main/config.ts`) — `enabled` defaults to `true`, `port` defaults to `3001`. Both can also be set from the Configurator's **Network** panel (**Configure Mappings… → Network — Q-SYS & UCI**) — after changing the port, click **Restart Now** to apply it. If you're opening a firewall rule for this app, the UCI port is the one to allow.
 
 **Network caveat:** this works over the same WiFi network only. If the venue network has AP/client isolation enabled, devices on the same SSID can't reach each other — that's a network configuration issue, not an app bug.
+
+---
+
+## Browser-based MIDI mappings
+
+The MIDI-to-Q-Sys mapping table (the same data the desktop **Configure
+Mappings** window edits) is also reachable from any browser on the LAN, so
+you don't need physical or remote-desktop access to the Mac to remap a
+control.
+
+**First-time setup:** open **Configure Mappings… → Network** panel and set
+a **Mappings Page** password — the page won't allow access until one is
+set.
+
+**Access it at:** `http://<lan-ip-or-localhost>:<port>/mappings` (same host
+and port as the FOH UCI). Enter the password to sign in; the session lasts
+24 hours per browser.
+
+The page has the same capabilities as the desktop Configurator: assign
+Q-Sys components/controls to physical MIDImix controls, and **Save** or
+**Save & Apply** (applies live, no restart). Component/control lists are
+fetched live from Q-Sys, same as the desktop version.
 
 ---
 

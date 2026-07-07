@@ -42,7 +42,11 @@ export interface Config {
   feedback: { enabled: boolean; mute_leds: FeedbackLED[] }
   // UCI web server (serves foh-uci.html + relays browser WS to the Core).
   // Defaults when absent: enabled: true, port: 3001.
-  uci?: { enabled?: boolean; port?: number }
+  uci?: { enabled?: boolean; port?: number; mappingsPasswordHash?: string }
+}
+
+export function isValidPort(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= 65535
 }
 
 function stripComments(text: string): string {

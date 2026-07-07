@@ -288,6 +288,16 @@
         <input type="checkbox" id="uci-enabled-toggle">
         Enabled
       </label>
+      <span class="net-label" style="width:auto;margin-left:14px">Port</span>
+      <input type="number" id="uci-port-input" min="1" max="65535" step="1" style="width:80px">
+      <button class="btn btn-ghost" id="uci-port-save-btn">Save</button>
+      <button class="btn btn-warn hidden" id="uci-restart-btn">Restart Now</button>
+    </div>
+    <div class="net-row">
+      <span class="net-label">Mappings Page</span>
+      <input type="password" id="mappings-password-input" placeholder="Set a password to enable /mappings" style="flex:1;max-width:200px">
+      <button class="btn btn-ghost" id="mappings-password-save-btn">Save</button>
+      <span id="mappings-password-status" style="font-size:11px;color:var(--text-dim)"></span>
     </div>
     <div class="net-hint" id="net-hint"></div>
   </div>
@@ -743,11 +753,18 @@ async function initNetwork() {
       lanCopyBtn.disabled = true
     }
     toggle.checked = info.uciEnabled
+    document.getElementById('uci-port-input').value = info.uciPort
   } catch (e) {
     localCode.textContent = 'Error: ' + e.message
     lanCode.textContent = 'Error: ' + e.message
     lanCopyBtn.disabled = true
   }
+
+  try {
+    const hasPassword = await ipcRenderer.invoke('cfg:has-mappings-password')
+    document.getElementById('mappings-password-input').placeholder =
+      hasPassword ? 'Password set — enter a new one to change it' : 'Set a password to enable /mappings'
+  } catch { /* leave default placeholder */ }
 }
 
 document.getElementById('host-save-btn').addEventListener('click', async () => {
@@ -797,6 +814,41 @@ document.getElementById('uci-enabled-toggle').addEventListener('change', async e
   } catch (err) {
     hint.textContent = 'Error: ' + err.message
     e.target.checked = !e.target.checked
+  }
+})
+
+document.getElementById('uci-port-save-btn').addEventListener('click', async () => {
+  const hint = document.getElementById('net-hint')
+  const portInput = document.getElementById('uci-port-input')
+  const restartBtn = document.getElementById('uci-restart-btn')
+  const port = parseInt(portInput.value, 10)
+  try {
+    await ipcRenderer.invoke('cfg:set-uci-port', port)
+    hint.textContent = 'Port saved — restart required to apply'
+    hint.style.color = 'var(--text-dim)'
+    restartBtn.classList.remove('hidden')
+  } catch (err) {
+    hint.textContent = 'Error: ' + err.message
+    hint.style.color = 'var(--red)'
+  }
+})
+
+document.getElementById('uci-restart-btn').addEventListener('click', () => {
+  ipcRenderer.invoke('cfg:restart-app')
+})
+
+document.getElementById('mappings-password-save-btn').addEventListener('click', async () => {
+  const input = document.getElementById('mappings-password-input')
+  const status = document.getElementById('mappings-password-status')
+  try {
+    await ipcRenderer.invoke('cfg:set-mappings-password', input.value)
+    status.textContent = '✓ Saved'
+    status.style.color = 'var(--green)'
+    input.value = ''
+    input.placeholder = 'Password set — enter a new one to change it'
+  } catch (err) {
+    status.textContent = '✗ ' + err.message
+    status.style.color = 'var(--red)'
   }
 })
 

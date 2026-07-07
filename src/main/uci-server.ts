@@ -21,6 +21,7 @@ import { Socket } from 'node:net'
 import { EventEmitter } from 'node:events'
 import { app } from 'electron'
 import { WebSocketServer, WebSocket } from 'ws'
+import type { MappingsHttpHandler } from './mappings-http.js'
 
 export class UciServer extends EventEmitter {
   private server: http.Server | null = null
@@ -29,6 +30,7 @@ export class UciServer extends EventEmitter {
   private relays = new Set<{ ws: WebSocket; tcp: Socket }>()
   private listening = false
   private _lastError: string | null = null
+  private mappingsHandler: MappingsHttpHandler | null = null
 
   /**
    * Start the UCI HTTP + WebSocket relay server.
@@ -38,14 +40,19 @@ export class UciServer extends EventEmitter {
    * @param coreHost   Q-Sys Core host for the TCP relay target
    * @param corePort   Q-Sys Core QRC port (1710)
    */
-  start(host: string, port: number, coreHost: string, corePort: number): void {
+  start(host: string, port: number, coreHost: string, corePort: number, mappingsHandler?: MappingsHttpHandler): void {
     if (this.server) return  // already started
+
+    this.mappingsHandler = mappingsHandler ?? null
+    this.mappingsHandler?.connect(coreHost, corePort)
 
     // Resolve the bundled UCI HTML via Electron's app path so it works both
     // in dev (npm start) and in a packaged app — never relative to __dirname.
     const uciHtmlPath = path.join(app.getAppPath(), 'assets', 'uci', 'foh-uci.html')
 
     const server = http.createServer((req, res) => {
+      if (this.mappingsHandler?.handle(req, res)) return
+
       if (req.method === 'GET' && (req.url === '/foh-uci' || req.url?.startsWith('/foh-uci?'))) {
         fs.readFile(uciHtmlPath, (err, data) => {
           if (err) {
@@ -133,6 +140,8 @@ export class UciServer extends EventEmitter {
    * close the HTTP/WS server. Safe to call if never started or already stopped.
    */
   stop(): void {
+    this.mappingsHandler?.disconnect()
+
     for (const { ws, tcp } of this.relays) {
       try { tcp.destroy() } catch { /* ignore */ }
       try { ws.terminate() } catch { /* ignore */ }

@@ -10,6 +10,7 @@ import path from 'node:path'
 import { loadConfig, getConfigPath, findConfigPath, seedUserConfig } from './config.js'
 import { Bridge } from './bridge.js'
 import { UciServer } from './uci-server.js'
+import { MappingsHttpHandler } from './mappings-http.js'
 import { Configurator } from './configurator.js'
 import { getLanIPv4 } from './network.js'
 
@@ -65,13 +66,19 @@ app.whenReady().then(async () => {
   const uciPort = config?.uci?.port ?? 3001
   let uciServer: UciServer | null = null
   if (config && uciEnabled) {
+    const mappingsHtmlPath = path.join(app.getAppPath(), 'assets', 'mappings', 'mappings.html')
+    const mappingsHandler = new MappingsHttpHandler(
+      findConfigPath(),
+      mappingsHtmlPath,
+      async () => { await bridge?.reloadConfig() },
+    )
     uciServer = new UciServer()
     uciServer.on('error', (err: Error) => {
       console.error(`[UCI] Server error: ${err.message}`)
     })
     // Bind 0.0.0.0 so LAN devices (iPad) can reach it; relay target is the
     // same Core the MIDI bridge talks to.
-    uciServer.start('0.0.0.0', uciPort, config.qsys.host, config.qsys.port)
+    uciServer.start('0.0.0.0', uciPort, config.qsys.host, config.qsys.port, mappingsHandler)
   }
 
   // Configurator window (lazily opened from tray menu)

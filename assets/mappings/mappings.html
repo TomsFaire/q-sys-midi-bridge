@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>MIDI Mappings</title>
+<style>
+  :root {
+    --bg: #f5f5f7; --surface: #ffffff; --border: #d1d1d6; --text: #1c1c1e;
+    --text-dim: #6e6e73; --accent: #007aff; --red: #ff3b30; --green: #34c759;
+    --orange: #ff9500; --group-bg: #e9e9ee;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-size: 13px; color: var(--text);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); min-height: 100vh; display: flex; flex-direction: column; }
+  header { display: flex; align-items: center; gap: 10px; padding: 12px 16px; background: var(--surface); border-bottom: 1px solid var(--border); }
+  header h1 { font-size: 16px; font-weight: 600; flex: 1; }
+  button { cursor: pointer; border: none; font-size: 12px; font-family: inherit; }
+  .btn { padding: 6px 14px; border-radius: 6px; font-weight: 500; }
+  .btn-ghost { background: var(--bg); color: var(--text); border: 1px solid var(--border); }
+  .btn-ghost:hover { background: var(--border); }
+  .btn-primary { background: var(--accent); color: white; }
+  .btn-primary:hover { background: #005ecb; }
+  .btn-warn { background: var(--orange); color: white; }
+  .btn-warn:hover { background: #cc7800; }
+  .hidden { display: none !important; }
+
+  #login-view { flex: 1; display: flex; align-items: center; justify-content: center; }
+  .login-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 28px; width: 300px; display: flex; flex-direction: column; gap: 12px; }
+  .login-card h2 { font-size: 15px; font-weight: 600; }
+  .login-card input[type=password] { padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 13px; }
+  .login-card p.hint { font-size: 12px; color: var(--text-dim); }
+  .login-card p.err { font-size: 12px; color: var(--red); min-height: 14px; }
+
+  .tabs { display: flex; gap: 2px; padding: 0 16px; background: var(--surface); border-bottom: 1px solid var(--border); overflow-x: auto; }
+  .tab { padding: 8px 12px; background: none; color: var(--text-dim); border-bottom: 2px solid transparent; margin-bottom: -1px; font-size: 12px; font-weight: 500; white-space: nowrap; }
+  .tab:hover { color: var(--text); }
+  .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+  .filterbar { display: flex; align-items: center; gap: 8px; padding: 8px 16px; background: var(--bg); border-bottom: 1px solid var(--border); }
+  .filterbar input[type=search] { padding: 5px 9px; border: 1px solid var(--border); border-radius: 5px; width: 180px; font-size: 12px; background: var(--surface); }
+  #count-label { font-size: 11px; color: var(--text-dim); margin-left: auto; }
+
+  .table-wrap { flex: 1; overflow-x: auto; }
+  table { width: 100%; min-width: 780px; border-collapse: collapse; }
+  thead tr { background: var(--surface); }
+  th { padding: 7px 10px; text-align: left; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.4px; color: var(--text-dim); border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--surface); }
+  td { padding: 5px 6px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+  tr.group-row { background: var(--group-bg); }
+  tr.group-row td { padding: 4px 10px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.6px; color: var(--text-dim); }
+  tr.ctrl-row.assigned { background: #f0fff4; }
+  .badge { display: inline-block; padding: 2px 7px; border-radius: 4px; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px; }
+  .badge-fader { background: #d1f0d1; color: #1a6b1a; }
+  .badge-knob  { background: #d4e5ff; color: #003fa8; }
+  .badge-toggle{ background: #ffe5d4; color: #a83000; }
+  select, input[type=text], input[type=number] { width: 100%; padding: 4px 6px; border: 1px solid var(--border); border-radius: 4px; background: var(--surface); font-size: 12px; color: var(--text); font-family: inherit; }
+  select:disabled, input:disabled { background: var(--bg); color: var(--text-dim); }
+  .td-label { font-size: 12px; font-weight: 500; padding-left: 10px; white-space: nowrap; }
+  .td-clear { text-align: center; }
+  .clear-btn { background: none; color: var(--text-dim); font-size: 13px; padding: 2px 5px; border-radius: 3px; }
+  .clear-btn:hover { background: #ffe5e5; color: var(--red); }
+
+  footer { display: flex; align-items: center; gap: 10px; padding: 10px 16px; background: var(--surface); border-top: 1px solid var(--border); }
+  #save-status { font-size: 12px; color: var(--text-dim); }
+  #save-status.ok  { color: var(--green); }
+  #save-status.err { color: var(--red); }
+  footer span.spacer { flex: 1; }
+</style>
+</head>
+<body>
+
+<div id="login-view">
+  <div class="login-card">
+    <h2>MIDI Mappings — Sign in</h2>
+    <input type="password" id="login-password" placeholder="Password">
+    <button class="btn btn-primary" id="login-btn">Sign in</button>
+    <p class="err" id="login-error"></p>
+    <p class="hint" id="login-setup-hint"></p>
+  </div>
+</div>
+
+<div id="app-view" class="hidden" style="display:flex;flex-direction:column;flex:1;min-height:0">
+  <header>
+    <h1>MIDI Mappings</h1>
+    <button class="btn btn-ghost" id="refresh-btn">↺ Refresh Q-Sys</button>
+  </header>
+
+  <div class="tabs" id="tabs">
+    <button class="tab active" data-group="all">All</button>
+    <button class="tab" data-group="Faders">Faders</button>
+    <button class="tab" data-group="Knobs A">Knobs A</button>
+    <button class="tab" data-group="Knobs B">Knobs B</button>
+    <button class="tab" data-group="Knobs C">Knobs C</button>
+    <button class="tab" data-group="Mutes">Mutes</button>
+    <button class="tab" data-group="Rec Arms">Rec Arms</button>
+    <button class="tab" data-group="Buttons">Buttons</button>
+  </div>
+
+  <div class="filterbar">
+    <input type="search" id="filter-input" placeholder="Filter e.g. Fader 1, Mute…">
+    <span id="count-label"></span>
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Control</th><th>Type</th><th>Q-Sys Component</th><th>Control Name</th><th>Min</th><th>Max</th><th></th>
+        </tr>
+      </thead>
+      <tbody id="tbody"></tbody>
+    </table>
+  </div>
+
+  <footer>
+    <button class="btn btn-primary" id="save-btn">Save</button>
+    <button class="btn btn-warn" id="save-apply-btn">Save &amp; Apply</button>
+    <span id="save-status"></span>
+    <span class="spacer"></span>
+  </footer>
+</div>
+
+<script>
+let physicalControls = []
+let components = []
+const ctrlCache = new Map()
+const assignments = new Map()
+let activeGroup = 'all'
+let filterText = ''
+
+function esc(str) {
+  return String(str).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+}
+
+async function api(path, opts) {
+  const res = await fetch(path, { credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, ...opts })
+  if (res.status === 401) { showLogin(); throw new Error('Session expired — please sign in again') }
+  const body = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(body.error || ('HTTP ' + res.status))
+  return body
+}
+
+function showLogin() {
+  document.getElementById('app-view').classList.add('hidden')
+  document.getElementById('login-view').classList.remove('hidden')
+}
+
+function showApp() {
+  document.getElementById('login-view').classList.add('hidden')
+  document.getElementById('app-view').classList.remove('hidden')
+}
+
+async function checkSession() {
+  const info = await api('/api/mappings/session')
+  if (!info.passwordSet) {
+    document.getElementById('login-setup-hint').textContent =
+      'No password set yet — open the Configurator on the bridge Mac (Network panel) to set one.'
+    document.getElementById('login-btn').disabled = true
+  }
+  if (info.authenticated) { await loadApp(); showApp() } else { showLogin() }
+}
+
+document.getElementById('login-btn').addEventListener('click', async () => {
+  const password = document.getElementById('login-password').value
+  const err = document.getElementById('login-error')
+  err.textContent = ''
+  try {
+    await api('/api/mappings/login', { method: 'POST', body: JSON.stringify({ password }) })
+    document.getElementById('login-password').value = ''
+    await loadApp()
+    showApp()
+  } catch (e) {
+    err.textContent = e.message
+  }
+})
+
+async function loadApp() {
+  const data = await api('/api/mappings')
+  physicalControls = data.physicalControls
+  assignments.clear()
+  for (const mObj of data.mappings) {
+    const pc = physicalControls.find(p =>
+      p.midi.type === mObj.midi.type && p.midi.channel === mObj.midi.channel && p.midi.number === mObj.midi.number)
+    if (pc) {
+      assignments.set(pc.id, {
+        component: mObj.qsys.component ?? '',
+        controlName: mObj.qsys.control ?? '',
+        min: mObj.qsys.min ?? -100,
+        max: mObj.qsys.max ?? 10,
+        label: mObj.label ?? pc.label,
+      })
+    }
+  }
+  await refreshComponents()
+  renderTable()
+}
+
+async function refreshComponents() {
+  try {
+    const data = await api('/api/qsys/components')
+    components = data.components
+    ctrlCache.clear()
+  } catch (e) {
+    components = []
+    const status = document.getElementById('save-status')
+    status.textContent = 'Q-Sys: ' + e.message
+    status.className = 'err'
+  }
+}
+
+async function getControlsFor(componentName) {
+  if (ctrlCache.has(componentName)) return ctrlCache.get(componentName)
+  let controls = []
+  try {
+    const data = await api('/api/qsys/components/' + encodeURIComponent(componentName) + '/controls')
+    controls = data.controls
+    controls.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }))
+  } catch { /* manual entry fallback */ }
+  ctrlCache.set(componentName, controls)
+  return controls
+}
+
+function renderTable() {
+  const tbody = document.getElementById('tbody')
+  tbody.innerHTML = ''
+  const lf = filterText.toLowerCase()
+  let shown = 0
+  let lastGroup = null
+
+  for (const pc of physicalControls) {
+    if (activeGroup !== 'all' && pc.group !== activeGroup) continue
+    if (lf && !pc.label.toLowerCase().includes(lf) && !pc.id.toLowerCase().includes(lf)) continue
+
+    if (pc.group !== lastGroup) {
+      const gr = tbody.insertRow()
+      gr.className = 'group-row'
+      gr.insertCell().colSpan = 7
+      gr.cells[0].textContent = pc.group
+      lastGroup = pc.group
+    }
+
+    const a = assignments.get(pc.id)
+    const isToggle = pc.controlType === 'toggle'
+    const row = tbody.insertRow()
+    row.className = 'ctrl-row' + (a?.component ? ' assigned' : '')
+    row.dataset.id = pc.id
+
+    const tdLabel = row.insertCell()
+    tdLabel.className = 'td-label'
+    tdLabel.textContent = pc.label
+
+    const tdType = row.insertCell()
+    tdType.innerHTML = '<span class="badge badge-' + pc.controlType + '">' + pc.controlType + '</span>'
+
+    const tdComp = row.insertCell()
+    const compSel = document.createElement('select')
+    compSel.dataset.id = pc.id
+    compSel.className = 'comp-sel'
+    compSel.innerHTML = '<option value="">— unassigned —</option>' +
+      components.map(c => '<option value="' + esc(c.name) + '"' + (a?.component === c.name ? ' selected' : '') + '>' + esc(c.name) + '</option>').join('')
+    tdComp.appendChild(compSel)
+
+    const tdCtrl = row.insertCell()
+    const dlId = 'dl-' + pc.id
+    const ctrlInput = document.createElement('input')
+    ctrlInput.type = 'text'
+    ctrlInput.dataset.id = pc.id
+    ctrlInput.className = 'ctrl-input'
+    ctrlInput.placeholder = a?.component ? 'type or pick…' : '—'
+    ctrlInput.value = a?.controlName ?? ''
+    ctrlInput.disabled = !a?.component
+    ctrlInput.setAttribute('list', dlId)
+    const dl = document.createElement('datalist')
+    dl.id = dlId
+    tdCtrl.appendChild(ctrlInput)
+    tdCtrl.appendChild(dl)
+
+    const tdMin = row.insertCell()
+    const minInp = document.createElement('input')
+    minInp.type = 'number'; minInp.step = 'any'
+    minInp.dataset.id = pc.id; minInp.className = 'min-inp'
+    minInp.value = String(a?.min ?? -100)
+    minInp.disabled = isToggle || !a?.component
+    if (isToggle) minInp.style.visibility = 'hidden'
+    tdMin.appendChild(minInp)
+
+    const tdMax = row.insertCell()
+    const maxInp = document.createElement('input')
+    maxInp.type = 'number'; maxInp.step = 'any'
+    maxInp.dataset.id = pc.id; maxInp.className = 'max-inp'
+    maxInp.value = String(a?.max ?? 10)
+    maxInp.disabled = isToggle || !a?.component
+    if (isToggle) maxInp.style.visibility = 'hidden'
+    tdMax.appendChild(maxInp)
+
+    const tdClear = row.insertCell()
+    tdClear.className = 'td-clear'
+    const clearBtn = document.createElement('button')
+    clearBtn.className = 'clear-btn'
+    clearBtn.dataset.id = pc.id
+    clearBtn.textContent = '✕'
+    clearBtn.disabled = !a?.component
+    tdClear.appendChild(clearBtn)
+
+    if (a?.component && ctrlCache.has(a.component)) {
+      populateDatalist(dl, ctrlCache.get(a.component))
+    } else if (a?.component) {
+      getControlsFor(a.component).then(ctrls => populateDatalist(dl, ctrls))
+    }
+
+    shown++
+  }
+
+  document.getElementById('count-label').textContent = shown + ' of ' + physicalControls.length + ' controls'
+}
+
+function populateDatalist(dl, controls) {
+  dl.innerHTML = controls.map(c => '<option value="' + esc(c.name) + '">').join('')
+}
+
+document.getElementById('tbody').addEventListener('change', async e => {
+  const el = e.target
+  const id = el.dataset.id
+  if (!id) return
+  if (el.classList.contains('comp-sel')) {
+    const componentName = el.value
+    const a = assignments.get(id) ?? {}
+    if (!componentName) { assignments.delete(id); renderTable(); return }
+    assignments.set(id, { ...a, component: componentName, controlName: '', min: -100, max: 10 })
+    await getControlsFor(componentName)
+    renderTable()
+  }
+})
+
+document.getElementById('tbody').addEventListener('input', e => {
+  const el = e.target
+  const id = el.dataset.id
+  if (!id) return
+  const a = assignments.get(id) ?? {}
+  if (el.classList.contains('ctrl-input')) {
+    assignments.set(id, { ...a, controlName: el.value.trim() })
+  } else if (el.classList.contains('min-inp')) {
+    assignments.set(id, { ...a, min: parseFloat(el.value) || 0 })
+  } else if (el.classList.contains('max-inp')) {
+    assignments.set(id, { ...a, max: parseFloat(el.value) || 1 })
+  }
+})
+
+document.getElementById('tbody').addEventListener('click', e => {
+  const btn = e.target.closest('.clear-btn')
+  if (!btn) return
+  assignments.delete(btn.dataset.id)
+  renderTable()
+})
+
+document.getElementById('tabs').addEventListener('click', e => {
+  const tab = e.target.closest('.tab')
+  if (!tab) return
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'))
+  tab.classList.add('active')
+  activeGroup = tab.dataset.group
+  renderTable()
+})
+
+document.getElementById('filter-input').addEventListener('input', e => {
+  filterText = e.target.value
+  renderTable()
+})
+
+document.getElementById('refresh-btn').addEventListener('click', async () => {
+  await refreshComponents()
+  renderTable()
+})
+
+function buildMappings() {
+  const mappings = []
+  for (const pc of physicalControls) {
+    const a = assignments.get(pc.id)
+    if (!a?.component || !a?.controlName) continue
+    const isToggle = pc.controlType === 'toggle'
+    mappings.push({
+      label: a.label || pc.label,
+      midi: { ...pc.midi },
+      qsys: isToggle
+        ? { type: 'toggle', component: a.component, control: a.controlName }
+        : { type: 'component_control', component: a.component, control: a.controlName, min: a.min ?? -100, max: a.max ?? 10 },
+    })
+  }
+  return mappings
+}
+
+document.getElementById('save-btn').addEventListener('click', async () => {
+  const status = document.getElementById('save-status')
+  status.className = ''; status.textContent = 'Saving…'
+  try {
+    const mappings = buildMappings()
+    const result = await api('/api/mappings', { method: 'POST', body: JSON.stringify(mappings) })
+    status.className = 'ok'; status.textContent = '✓ Saved — ' + result.count + ' mappings'
+  } catch (e) {
+    status.className = 'err'; status.textContent = '✗ ' + e.message
+  }
+})
+
+document.getElementById('save-apply-btn').addEventListener('click', async () => {
+  const status = document.getElementById('save-status')
+  status.className = ''; status.textContent = 'Applying…'
+  try {
+    const mappings = buildMappings()
+    const result = await api('/api/mappings/apply', { method: 'POST', body: JSON.stringify(mappings) })
+    status.className = 'ok'; status.textContent = '✓ Applied — ' + result.count + ' mappings'
+  } catch (e) {
+    status.className = 'err'; status.textContent = '✗ ' + e.message
+  }
+})
+
+checkSession().catch(e => {
+  document.getElementById('login-error').textContent = 'Error: ' + e.message
+})
+</script>
+</body>
+</html>
