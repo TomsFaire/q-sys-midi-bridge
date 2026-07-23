@@ -2815,6 +2815,19 @@ function loadPatchState() {
       });
     })
     .catch(e => console.error('[OutputRouter] loadPatchState error:', e.message));
+
+  QRC.call('Component.GetControls', { Name: 'Bus.Router' })
+    .then(function(r) {
+      const controls = r?.Controls ?? [];
+      controls.forEach(function(c) {
+        if (!c.Value) return;
+        const match = c.Name.match(/^output\.(\d+)\.input\.(\d+)\.select$/);
+        if (!match) return;
+        const select = document.querySelector(`#bus-router-tbody [data-output="${match[1]}"]`);
+        if (select) select.value = match[2];
+      });
+    })
+    .catch(e => console.error('[BusRouter] loadPatchState error:', e.message));
 }
 
 buildPatchTab();
