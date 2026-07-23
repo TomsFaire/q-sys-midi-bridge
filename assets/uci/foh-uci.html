@@ -2597,11 +2597,12 @@ const ROUTER_ROWS = [
   { label:'FX 2 Return',          mono:true,  out:[18]     },
 ];
 
-// Router's own input indices 1-6 → the 6 signals produced by OUTPUT_STRIPS processing
+// Router's own input indices 1-8 → the 6 signals produced by OUTPUT_STRIPS processing, plus 2 FX sends
 const OUTPUT_ROUTER_SOURCES = {
   1: 'Mains L',   2: 'Mains R',
   3: 'Zoom TX L', 4: 'Zoom TX R',
   5: 'Rec L',     6: 'Rec R',
+  7: 'FX 1 Send', 8: 'FX 2 Send',
 };
 
 // Router's own output indices 1-16 → physical destination, in the order given
@@ -2640,7 +2641,7 @@ function makeOutputRouterSelect(outputN) {
   const select = document.createElement('select');
   select.className = 'router-select';
   select.dataset.output = outputN;
-  for (let inp = 1; inp <= 6; inp++) {
+  for (let inp = 1; inp <= 8; inp++) {
     const opt = document.createElement('option');
     opt.value = inp;
     opt.textContent = OUTPUT_ROUTER_SOURCES[inp];
