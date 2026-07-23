@@ -2624,6 +2624,25 @@ const OUTPUT_ROUTER_ROWS = [
   { label: 'Dante 7', out: 15 }, { label: 'Dante 8', out: 16 },
 ];
 
+// Bus.Router's own output indices 1-8 (destinations)
+const BUS_ROUTER_ROWS = [
+  { label: 'AUX 1 L', out: 1 }, { label: 'AUX 1 R', out: 2 },
+  { label: 'AUX 2 L', out: 3 }, { label: 'AUX 2 R', out: 4 },
+  { label: 'AUX 3 L', out: 5 }, { label: 'AUX 3 R', out: 6 },
+  { label: 'FX 1 Send', out: 7 }, { label: 'FX 2 Send', out: 8 },
+];
+
+// Bus.Router's own input indices 1-14 (sources)
+const BUS_ROUTER_SOURCES = {
+  1: 'Mic Zoom',        2: 'Mic Room',
+  3: 'Music Room L',    4: 'Music Room R',
+  5: 'Music Zoom L',    6: 'Music Zoom R',
+  7: 'Slides Room L',   8: 'Slides Room R',
+  9: 'Slides Zoom L',   10: 'Slides Zoom R',
+  11: 'Zoom Rtn L',     12: 'Zoom Rtn R',
+  13: 'FX 1 Return',    14: 'FX 2 Return',
+};
+
 function makeSourceSelect(outputN) {
   const select = document.createElement('select');
   select.className = 'router-select';
@@ -2658,6 +2677,24 @@ function makeOutputRouterSelect(outputN) {
     const outN = this.dataset.output;
     const newInN = parseInt(this.value);
     QRC.component.set('Output.Router', [{ Name: `output.${outN}.input.${newInN}.select`, Value: true }]);
+  });
+  return select;
+}
+
+function makeBusRouterSelect(outputN) {
+  const select = document.createElement('select');
+  select.className = 'router-select';
+  select.dataset.output = outputN;
+  for (let inp = 1; inp <= 14; inp++) {
+    const opt = document.createElement('option');
+    opt.value = inp;
+    opt.textContent = BUS_ROUTER_SOURCES[inp];
+    select.appendChild(opt);
+  }
+  select.addEventListener('change', function() {
+    const outN = this.dataset.output;
+    const newInN = parseInt(this.value);
+    QRC.component.set('Bus.Router', [{ Name: `output.${outN}.input.${newInN}.select`, Value: true }]);
   });
   return select;
 }
@@ -2723,6 +2760,22 @@ function buildPatchTab() {
     selectCell.appendChild(makeOutputRouterSelect(row.out));
     tr.appendChild(selectCell);
     outputTbody.appendChild(tr);
+  });
+
+  // Bus Router table
+  const busRouterTbody = document.getElementById('bus-router-tbody');
+  busRouterTbody.innerHTML = '';
+  BUS_ROUTER_ROWS.forEach(function(row) {
+    const tr = document.createElement('tr');
+    const labelCell = document.createElement('td');
+    labelCell.className = 'router-label';
+    labelCell.textContent = row.label;
+    tr.appendChild(labelCell);
+
+    const selectCell = document.createElement('td');
+    selectCell.appendChild(makeBusRouterSelect(row.out));
+    tr.appendChild(selectCell);
+    busRouterTbody.appendChild(tr);
   });
 }
 
