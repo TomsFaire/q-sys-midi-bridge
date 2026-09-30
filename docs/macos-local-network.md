@@ -19,10 +19,25 @@ Two things are needed:
    has no `Contents/_CodeSignature` at all and reports the stock `Electron`
    signing identifier rather than `com.tomsfaire.midi-qsys-bridge`.
 
-`scripts/sign-macos.sh` does both. Run it after packaging:
+Both are wired into the build, so a normal `npm run package` produces a
+signed app that can be granted Local Network access:
+
+- `mac.extendInfo` in `package.json` puts `NSLocalNetworkUsageDescription` into
+  `Info.plist` at package time.
+- `scripts/after-pack.js`, registered as electron-builder's `afterPack` hook,
+  runs `scripts/sign-macos.sh` on the packed `.app`.
+
+The hook has to be `afterPack`, not `afterSign`: `mac.identity` is `null`, so
+electron-builder skips signing and `afterSign` never fires. It also has to run
+before `electron-builder` returns, because the DMG is assembled from the packed
+app — signing afterwards would ship an unsigned bundle inside a signed-looking
+release.
+
+The script stays standalone and idempotent, so you can still run it by hand
+against any bundle:
 
 ```sh
-scripts/sign-macos.sh "dist/mac-arm64/MIDI Q-Sys Bridge.app"
+scripts/sign-macos.sh "release/mac-arm64/MIDI Q-Sys Bridge.app"
 ```
 
 Set `CODESIGN_IDENTITY` to a Developer ID for release builds; it defaults to
