@@ -17,9 +17,22 @@ function fakeCore(
     password?: string
     port?: number
     rejectProbeWith?: { code: number; message: string }
+    /** Methods this Core answers even before a logon (e.g. StatusGet). */
+    ungatedMethods?: string[]
+    /** Error this Core returns pre-logon, if not the documented code 10. */
+    logonRequiredError?: { code: number; message: string }
+    /** Only accept Logon params spelled this way. */
+    logonParamStyle?: 'upper' | 'lower'
   } = {},
 ) {
-  const { requireLogon = false, password = 'secret', rejectProbeWith } = options
+  const {
+    requireLogon = false,
+    password = 'secret',
+    rejectProbeWith,
+    ungatedMethods = [],
+    logonRequiredError = { code: 10, message: 'Logon required' },
+    logonParamStyle = 'upper',
+  } = options
   const seen: string[] = []
   const sockets = new Set<Socket>()
   // Flipped by rejectEverything() to mimic Access Control being switched on
@@ -53,7 +66,15 @@ function fakeCore(
           socket.write(`${JSON.stringify({ jsonrpc: '2.0', id: msg.id, ...body })}\0`)
 
         if (msg.method === 'Logon') {
-          if (msg.params?.Password === password) {
+          const params = msg.params as Record<string, unknown> | undefined
+          const supplied =
+            logonParamStyle === 'upper' ? params?.Password : params?.password
+          const wrongShape =
+            logonParamStyle === 'upper' ? params?.Password === undefined
+                                        : params?.password === undefined
+          if (wrongShape) {
+            reply({ error: { code: -32602, message: 'Invalid params' } })
+          } else if (supplied === password) {
             authed = true
             reply({ result: true })
           } else {
@@ -62,16 +83,29 @@ function fakeCore(
           continue
         }
 
-        if (rejectProbeWith && msg.method === 'StatusGet') {
+        if (rejectProbeWith && msg.method === 'Component.Get') {
           reply({ error: rejectProbeWith })
           continue
         }
 
-        reply(
-          authed && !lockedDown
-            ? { result: { ok: true } }
-            : { error: { code: 10, message: 'Logon required' } },
-        )
+        if (!authed && ungatedMethods.includes(msg.method)) {
+          // Answered before logon, the way a real Core answers StatusGet.
+          reply({ result: { ok: true } })
+          continue
+        }
+
+        if (!authed || lockedDown) {
+          reply({ error: logonRequiredError })
+          continue
+        }
+
+        // Authorised. An unknown component is a complaint about the request,
+        // not a refusal to serve it.
+        if (msg.method === 'Component.Get') {
+          reply({ error: { code: 7, message: 'Unknown component name' } })
+          continue
+        }
+        reply({ result: { ok: true } })
       }
     })
   })
@@ -104,8 +138,8 @@ test('connects without a logon when no credentials are configured', async () => 
   assert.equal(client.isConnected, true)
   assert.equal(client.lastError, null)
   assert.equal(core.seen.includes('Logon'), false)
-  // An open Core answers the probe, so the connection stands.
-  assert.equal(core.seen.includes('StatusGet'), true)
+  // An open Core engages with the probe, so the connection stands.
+  assert.equal(core.seen.includes('Component.Get'), true)
 
   await client.disconnect()
   await core.close()
@@ -233,6 +267,88 @@ test('a failed initial connect still schedules a retry', async () => {
   })
 
   assert.equal(client.isConnected, true)
+  await client.disconnect()
+  await core.close()
+})
+
+
+test('a Core that answers StatusGet before logon is still detected', async () => {
+  // The firmware assumption that worried me most: status is how clients
+  // discover a Core, so it may well be served pre-logon. Probing with it
+  // would have reported an Access Control Core as wide open.
+  const core = fakeCore({ requireLogon: true, ungatedMethods: ['StatusGet'] })
+  const port = await core.listen()
+  const client = new QrcClient('127.0.0.1', port)
+
+  await assert.rejects(() => client.connect(), /logon required/i)
+  assert.equal(client.isConnected, false)
+  assert.equal(core.seen.includes('StatusGet'), false)
+
+  await client.disconnect()
+  await core.close()
+})
+
+test('an Access Control Core using a non-standard error code is still detected', async () => {
+  // Detection must not hinge on the documented code 10.
+  const core = fakeCore({
+    requireLogon: true,
+    logonRequiredError: { code: 1234, message: 'Not authorized for this operation' },
+  })
+  const port = await core.listen()
+  const client = new QrcClient('127.0.0.1', port)
+
+  await assert.rejects(() => client.connect(), /logon required/i)
+  assert.equal(client.isConnected, false)
+
+  await client.disconnect()
+  await core.close()
+})
+
+test('an unknown-component complaint proves the Core authorised us', async () => {
+  // An open Core rejects the probe component — that is engagement, not
+  // refusal, and must not be mistaken for an authorisation failure.
+  const core = fakeCore()
+  const port = await core.listen()
+  const client = new QrcClient('127.0.0.1', port)
+
+  await client.connect()
+  assert.equal(client.isConnected, true)
+  assert.equal(client.lastError, null)
+
+  await client.disconnect()
+  await core.close()
+})
+
+test('Logon retries with lowercase keys when the Core objects to the shape', async () => {
+  const core = fakeCore({ requireLogon: true, logonParamStyle: 'lower' })
+  const port = await core.listen()
+  const client = new QrcClient('127.0.0.1', port, undefined, {
+    username: 'admin',
+    password: 'secret',
+  })
+
+  await client.connect()
+  assert.equal(client.isConnected, true)
+  // Two Logon attempts: the documented shape, then the fallback.
+  assert.equal(core.seen.filter((m) => m === 'Logon').length, 2)
+
+  await client.disconnect()
+  await core.close()
+})
+
+test('a rejected credential is not retried as a parameter-shape problem', async () => {
+  // Only an invalid-params error earns a second attempt; a plain "no" must
+  // not send the password twice.
+  const core = fakeCore({ requireLogon: true })
+  const port = await core.listen()
+  const client = new QrcClient('127.0.0.1', port, undefined, {
+    username: 'admin',
+    password: 'wrong',
+  })
+
+  await assert.rejects(() => client.connect(), /logon failed/i)
+  assert.equal(core.seen.filter((m) => m === 'Logon').length, 1)
+
   await client.disconnect()
   await core.close()
 })

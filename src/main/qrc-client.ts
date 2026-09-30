@@ -53,12 +53,25 @@ export interface QrcCredentials {
 const QRC_LOGON_REQUIRED_CODE = 10
 
 /**
- * Read-only call used to check whether the Core will actually accept commands.
+ * Component name no real design will contain, used to probe authorisation.
+ *
  * A Core with Access Control enabled completes the TCP handshake and *then*
- * rejects everything, so without this probe a client with no credentials looks
- * perfectly healthy while controlling nothing.
+ * rejects everything, so without a probe a client with no credentials looks
+ * perfectly healthy while controlling nothing. We ask about a component that
+ * cannot exist and read the *shape* of the reply rather than a specific code:
+ *
+ *   complains about the component -> it processed our request, so we are in
+ *   refuses to engage at all      -> we are not
+ *
+ * Component.Get is used rather than StatusGet because status is the call a
+ * Core is most likely to answer before logon — it is how clients discover a
+ * Core in the first place.
  */
-const AUTH_PROBE_METHOD = 'StatusGet'
+const AUTH_PROBE_COMPONENT = '__qsys_bridge_auth_probe__'
+
+/** JSON-RPC codes meaning "I didn't understand the request", not "no". */
+const JSONRPC_METHOD_NOT_FOUND = -32601
+const JSONRPC_INVALID_PARAMS = -32602
 
 /** A JSON-RPC error returned by the Core, pre-classified as auth or not. */
 export class QrcError extends Error {
@@ -261,26 +274,71 @@ export class QrcClient extends EventEmitter {
   private async authenticate(): Promise<void> {
     if (this.credentials) {
       const { username, password } = this.credentials
-      try {
-        await this.call('Logon', { User: username, Password: password ?? '' })
-      } catch (err) {
-        throw new Error(`Logon failed for "${username}" — ${coreReason(err)}`)
-      }
-      console.log(`[QRC] Logged on to Q-SYS as "${username}"`)
+      await this.logon(username ?? '', password ?? '')
       return
     }
 
     // No credentials configured. If the Core turns out to want them, say so
     // now rather than letting every fader move fail silently later.
+    //
+    // The verdict comes from what the Core *did*, not from one error code:
+    // a Core that authorised us will object to the component, a Core that
+    // did not will refuse the call outright. Firmware that numbers its
+    // errors differently still lands on the right side of that line.
     try {
-      await this.call(AUTH_PROBE_METHOD)
+      await this.call('Component.Get', { Name: AUTH_PROBE_COMPONENT, Controls: [] })
+      // Some designs answer for an unknown component rather than erroring.
+      // Either way the Core engaged with us, which it could only do after
+      // authorising us.
+      return
     } catch (err) {
-      if (err instanceof QrcError && err.isAuthError) {
-        throw new Error('Logon required — set qsys.username/password in config.json')
+      if (err instanceof QrcError) {
+        if (err.isAuthError) {
+          throw new Error('Logon required — set qsys.username/password in config.json')
+        }
+        console.log(
+          `[QRC] Authorisation probe answered ${err.code}: ${err.coreMessage} — ` +
+          'the Core is processing commands',
+        )
+        return
       }
-      // Any other probe failure (timeout, a Core that doesn't like the method)
-      // says nothing about authorisation, so let the connection stand.
+      // A timeout or transport failure says nothing about authorisation, so
+      // let the connection stand rather than locking the user out on a guess.
+      console.warn(`[QRC] Authorisation probe inconclusive: ${(err as Error).message}`)
     }
+  }
+
+  /**
+   * Q-SYS documents Logon params as `{User, Password}`. If a Core objects to
+   * the *shape* of the request rather than to the credentials, try the other
+   * spelling before declaring the credentials bad — an invalid-params error
+   * is a very different thing from a rejection.
+   */
+  private async logon(username: string, password: string): Promise<void> {
+    const shapes: Record<string, unknown>[] = [
+      { User: username, Password: password },
+      { user: username, password: password },
+    ]
+
+    let lastErr: unknown
+    for (const params of shapes) {
+      try {
+        await this.call('Logon', params)
+        console.log(`[QRC] Logged on to Q-SYS as "${username}"`)
+        return
+      } catch (err) {
+        lastErr = err
+        const misunderstood =
+          err instanceof QrcError &&
+          (err.code === JSONRPC_INVALID_PARAMS || err.code === JSONRPC_METHOD_NOT_FOUND)
+        if (!misunderstood) break
+        console.warn(
+          `[QRC] Core rejected the Logon parameter shape (${(err as QrcError).code}: ` +
+          `${(err as QrcError).coreMessage}) — retrying with lowercase keys`,
+        )
+      }
+    }
+    throw new Error(`Logon failed for "${username}" — ${coreReason(lastErr)}`)
   }
 
   /** True for the errors a Core returns when Access Control blocks a call. */
@@ -331,6 +389,15 @@ export class QrcClient extends EventEmitter {
     this.pending.delete(id)
     if (msg.error) {
       const isAuth = this.isAuthError(msg.error)
+      if (isAuth && msg.error.code !== QRC_LOGON_REQUIRED_CODE) {
+        // Classified on wording alone. Log the code verbatim: if this Core is
+        // in fact behaving correctly, this is the line that tells us which
+        // code to add to the known set.
+        console.warn(
+          `[QRC] Treating code ${msg.error.code} ("${msg.error.message}") as an ` +
+          `authorisation failure based on its wording, not its code`,
+        )
+      }
       if (isAuth) {
         // Access Control can also be switched on while we are connected, in
         // which case the socket stays up and every call starts coming back
