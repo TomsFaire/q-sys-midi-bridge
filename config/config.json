@@ -1,7 +1,11 @@
 {
+  // username/password are only needed when the Core has Access Control
+  // enabled (Core Manager → Access Control). Leave them blank otherwise.
   "qsys": {
     "host": "",
-    "port": 1710
+    "port": 1710,
+    "username": "",
+    "password": ""
   },
   // UCI web server: serves foh-uci.html and relays browser WebSocket → Core.
   // Defaults when absent: enabled: true, port: 3001.

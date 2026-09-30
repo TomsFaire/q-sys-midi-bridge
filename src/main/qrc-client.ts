@@ -39,6 +39,44 @@ interface JsonRpcResponse {
   error?: { code: number; message: string }
 }
 
+/**
+ * Credentials for a Core with Access Control enabled. When `username` is
+ * empty the client skips the logon handshake entirely, which is the correct
+ * behaviour for an open Core.
+ */
+export interface QrcCredentials {
+  username?: string
+  password?: string
+}
+
+/** Q-SYS returns this code when a call is made before a successful Logon. */
+const QRC_LOGON_REQUIRED_CODE = 10
+
+/**
+ * Read-only call used to check whether the Core will actually accept commands.
+ * A Core with Access Control enabled completes the TCP handshake and *then*
+ * rejects everything, so without this probe a client with no credentials looks
+ * perfectly healthy while controlling nothing.
+ */
+const AUTH_PROBE_METHOD = 'StatusGet'
+
+/** A JSON-RPC error returned by the Core, pre-classified as auth or not. */
+export class QrcError extends Error {
+  constructor(
+    readonly code: number,
+    readonly coreMessage: string,
+    readonly isAuthError: boolean,
+  ) {
+    super(`QRC error ${code}: ${coreMessage}`)
+    this.name = 'QrcError'
+  }
+}
+
+/** The Core's own wording for a failure, without our JSON-RPC framing. */
+function coreReason(err: unknown): string {
+  return err instanceof QrcError ? err.coreMessage : (err as Error).message
+}
+
 export class QrcClient extends EventEmitter {
   private host: string
   private port: number
@@ -55,11 +93,22 @@ export class QrcClient extends EventEmitter {
   private nextId = 1
   private pending = new Map<number, PendingRequest>()
 
-  constructor(host: string, port = DEFAULT_PORT, timeoutMs = DEFAULT_TIMEOUT_MS) {
+  private credentials: QrcCredentials | null
+  private _lastError: string | null = null
+
+  constructor(
+    host: string,
+    port = DEFAULT_PORT,
+    timeoutMs = DEFAULT_TIMEOUT_MS,
+    credentials?: QrcCredentials,
+  ) {
     super()
     this.host = host
     this.port = port
     this.timeoutMs = timeoutMs
+    // Treat a blank username as "no Access Control" so an untouched config
+    // behaves exactly as it did before.
+    this.credentials = credentials?.username ? credentials : null
   }
 
   async connect(): Promise<void> {
@@ -75,7 +124,16 @@ export class QrcClient extends EventEmitter {
       })
       return
     }
-    await this.performConnect()
+    try {
+      await this.performConnect()
+    } catch (err) {
+      // The initial connect never set _connected, so handleDisconnect()
+      // early-returns and no reconnect is scheduled — the client would stay
+      // dead forever. Start the backoff loop here so a Core that is slow to
+      // boot, or briefly unreachable at login, recovers on its own.
+      if (!this.destroyed) this.scheduleReconnect()
+      throw err
+    }
   }
 
   async call(method: string, params?: Record<string, unknown>): Promise<unknown> {
@@ -123,6 +181,16 @@ export class QrcClient extends EventEmitter {
     return this._connected
   }
 
+  /**
+   * Set while the Core is actively refusing us — wrong credentials, or Access
+   * Control enabled with none configured. Null when we are simply connected,
+   * or simply unreachable. Surfaced in the tray so an authorisation failure is
+   * visible without reading logs.
+   */
+  get lastError(): string | null {
+    return this._lastError
+  }
+
   private async performConnect(): Promise<void> {
     return new Promise<void>((resolve, reject) => {
       const socket = new Socket()
@@ -135,17 +203,39 @@ export class QrcClient extends EventEmitter {
 
       socket.once('connect', () => {
         clearTimeout(connectTimeout)
+        // Set _connected before authenticating: call() checks this flag, and
+        // Logon has to go out over this very socket.
         this._connected = true
         this.reconnectDelay = BASE_RECONNECT_DELAY_MS
         this.buffer = ''
-        this.startKeepAlive()
-        this.emit('connect')
-        resolve()
+        this.authenticate()
+          .then(() => {
+            this._lastError = null
+            this.startKeepAlive()
+            this.emit('connect')
+            resolve()
+          })
+          .catch((err: Error) => {
+            // Bad credentials shouldn't look like a network fault. Record the
+            // reason, drop the socket, and let connect() schedule the retry.
+            // Clearing _connected *before* destroy() matters: it makes the
+            // 'close' handler early-return so handleDisconnect() can't wipe
+            // the message we are about to show.
+            this._lastError = err.message
+            this._connected = false
+            this.emit('auth-error', err.message)
+            socket.destroy()
+            this.socket = null
+            reject(err)
+          })
       })
 
       socket.once('error', (err) => {
         clearTimeout(connectTimeout)
         this._connected = false
+        // Couldn't even reach the Core — whatever it told us last time no
+        // longer applies. The tray falls back to a plain "Disconnected".
+        this._lastError = null
         reject(err)
       })
 
@@ -158,6 +248,49 @@ export class QrcClient extends EventEmitter {
 
       socket.connect(this.port, this.host)
     })
+  }
+
+  /**
+   * Establish that the Core will accept our commands, by logging on when
+   * credentials are configured and by probing when they are not.
+   *
+   * Rejecting here is what keeps "connected" honest: a Core with Access
+   * Control enabled accepts the socket either way, so the only difference
+   * between a working bridge and a mute one is whether calls come back.
+   */
+  private async authenticate(): Promise<void> {
+    if (this.credentials) {
+      const { username, password } = this.credentials
+      try {
+        await this.call('Logon', { User: username, Password: password ?? '' })
+      } catch (err) {
+        throw new Error(`Logon failed for "${username}" — ${coreReason(err)}`)
+      }
+      console.log(`[QRC] Logged on to Q-SYS as "${username}"`)
+      return
+    }
+
+    // No credentials configured. If the Core turns out to want them, say so
+    // now rather than letting every fader move fail silently later.
+    try {
+      await this.call(AUTH_PROBE_METHOD)
+    } catch (err) {
+      if (err instanceof QrcError && err.isAuthError) {
+        throw new Error('Logon required — set qsys.username/password in config.json')
+      }
+      // Any other probe failure (timeout, a Core that doesn't like the method)
+      // says nothing about authorisation, so let the connection stand.
+    }
+  }
+
+  /** True for the errors a Core returns when Access Control blocks a call. */
+  private isAuthError(error: { code: number; message: string }): boolean {
+    return (
+      error.code === QRC_LOGON_REQUIRED_CODE ||
+      /logon|log on|login|authenticat|not authorized|unauthorized/i.test(
+        error.message ?? ''
+      )
+    )
   }
 
   private handleData(chunk: Buffer): void {
@@ -197,7 +330,18 @@ export class QrcClient extends EventEmitter {
     clearTimeout(pending.timer)
     this.pending.delete(id)
     if (msg.error) {
-      pending.reject(new Error(`QRC error ${msg.error.code}: ${msg.error.message}`))
+      const isAuth = this.isAuthError(msg.error)
+      if (isAuth) {
+        // Access Control can also be switched on while we are connected, in
+        // which case the socket stays up and every call starts coming back
+        // rejected. Record it so the tray stops claiming we are fine.
+        this._lastError = this.credentials
+          ? `Logon rejected for "${this.credentials.username}" — ${msg.error.message}`
+          : 'Logon required — set qsys.username/password in config.json'
+        console.error(`[QRC] ${this._lastError}`)
+        this.emit('auth-error', this._lastError)
+      }
+      pending.reject(new QrcError(msg.error.code, msg.error.message, isAuth))
     } else {
       pending.resolve(msg.result)
     }
@@ -206,6 +350,9 @@ export class QrcClient extends EventEmitter {
   private handleDisconnect(reason: string): void {
     if (!this._connected) return
     this._connected = false
+    // A dropped socket is a network fact, not an authorisation one — don't let
+    // a stale auth message outlive the connection it described.
+    this._lastError = null
     this.stopKeepAlive()
     this.rejectAllPending(new Error(`QRC disconnected: ${reason}`))
     this.emit('disconnect', reason)

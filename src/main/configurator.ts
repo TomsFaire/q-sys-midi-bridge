@@ -10,6 +10,7 @@ import { BrowserWindow, ipcMain, app } from 'electron'
 import path from 'node:path'
 import fs from 'node:fs'
 import { QrcClient } from './qrc-client.js'
+import type { QrcCredentials } from './qrc-client.js'
 import { isValidPort, stripComments } from './config.js'
 import type { Mapping } from './config.js'
 import { getLanIPv4 } from './network.js'
@@ -38,6 +39,9 @@ export class Configurator {
     // hasn't been written to the file yet (e.g. no config.json present).
     private readonly uciPort: number = 3001,
     private readonly isBridgeActive: () => boolean = () => false,
+    // Credentials for a Core with Access Control enabled — discovery needs to
+    // log on just like the bridge does, or component lists come back empty.
+    private readonly credentials?: QrcCredentials,
   ) {
     this.registerIpc()
   }
@@ -49,7 +53,7 @@ export class Configurator {
     }
 
     // Fresh QRC connection just for discovery
-    this.qrc = new QrcClient(this.host, this.port)
+    this.qrc = new QrcClient(this.host, this.port, undefined, this.credentials)
     this.qrc.connect().catch(() => { /* status shown in UI */ })
 
     this.window = new BrowserWindow({
@@ -121,7 +125,7 @@ export class Configurator {
       this.host = trimmed
       this.qrc?.disconnect().catch(() => {})
       if (trimmed) {
-        this.qrc = new QrcClient(trimmed, this.port)
+        this.qrc = new QrcClient(trimmed, this.port, undefined, this.credentials)
         // Push a status update to the renderer window when the connection lands
         this.qrc.once('connect', () => {
           this.window?.webContents.send('cfg:host-connected')
