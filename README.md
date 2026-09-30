@@ -101,7 +101,9 @@ And in `config.json`, faders and mutes always target the Gain block component (`
 {
   "qsys": {
     "host": "10.4.84.20",    // Q-Sys Core IP
-    "port": 1710             // QRC port — don't change unless you've moved it
+    "port": 1710,            // QRC port — don't change unless you've moved it
+    "username": "",          // only if the Core has Access Control enabled
+    "password": ""           // "
   },
   "midi": {
     "deviceName": "MIDI Mix" // Substring match against MIDI port name
@@ -110,6 +112,29 @@ And in `config.json`, faders and mutes always target the Gain block component (`
   "feedback": { ... }        // see below
 }
 ```
+
+### Core Access Control
+
+If the Core has **Access Control** enabled (Core Manager → Access Control),
+it refuses every QRC call until the client logs on. Set `qsys.username` and
+`qsys.password` and the bridge performs that logon automatically — on the
+MIDI bridge connection, on the Configurator's component discovery, and on
+the UCI relay, so the FOH web UI keeps working without credentials being
+exposed to the browser.
+
+Leave both blank for an open Core and no logon is attempted.
+
+**Symptom when this is misconfigured:** the tray shows
+`Q-Sys: ✕ Logon required — set qsys.username/password in config.json`
+instead of `● Connected`. Wrong credentials report
+`✕ Logon failed for "<user>" — <reason from the Core>`. The bridge keeps
+retrying with backoff, so re-enabling access on the Core side is picked up
+on its own.
+
+Changing the credentials themselves does need an app restart: there is no
+config file watcher, and the Configurator has no field for them. Edit
+`config.json` in the app's user-data directory (the path is shown in the
+error when no config is found), then quit and relaunch the tray app.
 
 ### mappings
 

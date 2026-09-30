@@ -36,7 +36,9 @@ export interface FeedbackLED {
 }
 
 export interface Config {
-  qsys: { host: string; port: number }
+  // username/password are only needed when the Core has Access Control
+  // enabled; leave them out (or blank) for an open Core.
+  qsys: { host: string; port: number; username?: string; password?: string }
   midi: { deviceName: string }
   mappings: Mapping[]
   feedback: { enabled: boolean; mute_leds: FeedbackLED[] }

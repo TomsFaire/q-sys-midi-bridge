@@ -60,6 +60,13 @@ app.whenReady().then(async () => {
   const hasHost = !!config?.qsys?.host
   const bridge = config && hasHost ? new Bridge(config) : null
 
+  // Populated only when the Core has Access Control enabled; blank fields
+  // mean "open Core" and every consumer skips the logon.
+  const qsysCredentials = {
+    username: config?.qsys?.username,
+    password: config?.qsys?.password,
+  }
+
   // UCI web server — serves foh-uci.html and relays browser WS traffic to the
   // Core over its own TCP sockets (independent of the MIDI bridge connection).
   const uciEnabled = hasHost && (config?.uci?.enabled ?? true)
@@ -78,7 +85,14 @@ app.whenReady().then(async () => {
     })
     // Bind 0.0.0.0 so LAN devices (iPad) can reach it; relay target is the
     // same Core the MIDI bridge talks to.
-    uciServer.start('0.0.0.0', uciPort, config.qsys.host, config.qsys.port, mappingsHandler)
+    uciServer.start(
+      '0.0.0.0',
+      uciPort,
+      config.qsys.host,
+      config.qsys.port,
+      mappingsHandler,
+      qsysCredentials,
+    )
   }
 
   // Configurator window (lazily opened from tray menu)
@@ -89,6 +103,7 @@ app.whenReady().then(async () => {
     async () => { await bridge?.reloadConfig() },
     uciPort,
     () => bridge !== null,
+    qsysCredentials,
   )
 
   // Build the tray icon
@@ -98,6 +113,10 @@ app.whenReady().then(async () => {
   function buildMenu(): Electron.Menu {
     const qrcOk = bridge?.qrcConnected ?? false
     const midiOk = bridge?.midiConnected ?? false
+    // Takes priority over both Connected and Disconnected: a Core with Access
+    // Control enabled accepts the socket and then refuses every call, so
+    // "Connected" would be the most misleading thing we could show.
+    const qrcError = bridge?.qrcLastError ?? null
 
     const lanIp = getLanIPv4()
     const uciUrl = uciEnabled && lanIp ? `http://${lanIp}:${uciPort}/foh-uci` : null
@@ -114,7 +133,15 @@ app.whenReady().then(async () => {
 
     const items: Electron.MenuItemConstructorOptions[] = [
       {
-        label: `Q-Sys:  ${qrcOk ? `● Connected (${bridge!.qsysHost})` : hasHost ? '○ Disconnected' : '○ No host — open Configure Mappings'}`,
+        label: `Q-Sys:  ${
+          qrcError
+            ? `✕ ${qrcError.length > 60 ? `${qrcError.slice(0, 57)}…` : qrcError}`
+            : qrcOk
+              ? `● Connected (${bridge!.qsysHost})`
+              : hasHost
+                ? '○ Disconnected'
+                : '○ No host — open Configure Mappings'
+        }`,
         enabled: false,
       },
       {

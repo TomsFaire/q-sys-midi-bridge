@@ -8,6 +8,7 @@
 import http from 'node:http'
 import fs from 'node:fs'
 import { QrcClient } from './qrc-client.js'
+import type { QrcCredentials } from './qrc-client.js'
 import { stripComments } from './config.js'
 import { verifyPassword, SessionStore } from './auth.js'
 import {
@@ -33,8 +34,8 @@ export class MappingsHttpHandler {
   ) {}
 
   /** Opens the discovery QRC connection. Call once, alongside UciServer.start(). */
-  connect(coreHost: string, corePort: number): void {
-    this.qrc = new QrcClient(coreHost, corePort)
+  connect(coreHost: string, corePort: number, credentials?: QrcCredentials): void {
+    this.qrc = new QrcClient(coreHost, corePort, undefined, credentials)
     this.qrc.connect().catch(() => { /* discovery calls surface the error */ })
   }
 
