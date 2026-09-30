@@ -112,12 +112,30 @@ const QRC = (() => {
     };
   }
 
+  // ── Local-write echo tracking ───────────────────────────────────────────────
+  // Every Component.Set we send comes back on the next ChangeGroup poll. Applying
+  // that echo is harmless in principle but can yank a fader the user has already
+  // grabbed again. Remember what we wrote for a short window and ignore the poll
+  // entry only if the value coming back is the value we sent — a *different*
+  // value means someone else (Designer, MIDI bridge, another tab) moved it, and
+  // that must always be applied.
+  const localWrites = new Map();   // "Component|Control" → { value, expires }
+  const ECHO_WINDOW_MS = 600;
+
+  function sameValue(a, b) {
+    if (typeof a === 'boolean' || typeof b === 'boolean') return (!!a) === (!!b);
+    if (typeof a === 'number' && typeof b === 'number') return Math.abs(a - b) < 0.05;
+    return a === b;
+  }
+
   return {
     connect: (url) => doConnect(url),
     on: (event, cb) => { handlers[event] = cb; },
     call: (method, params) => rpc(method, params),
     component: {
       set(name, controls) {
+        const expires = Date.now() + ECHO_WINDOW_MS;
+        controls.forEach(c => localWrites.set(name + '|' + c.Name, { value: c.Value, expires }));
         rpc('Component.Set', { Name: name, Controls: controls })
           .catch(e => console.error('[QRC] Component.Set error:', name, JSON.stringify(controls), '→', e.message));
       },
@@ -127,6 +145,14 @@ const QRC = (() => {
           .catch(() => cb([]));
       },
     },
+    /** True if this poll entry is the echo of a Component.Set we just sent. */
+    isLocalEcho(compName, controlName, value) {
+      const key = compName + '|' + controlName;
+      const w = localWrites.get(key);
+      if (!w) return false;
+      if (Date.now() > w.expires) { localWrites.delete(key); return false; }
+      return sameValue(w.value, value);
+    },
     changeGroup: {
       create: (id) => rpc('ChangeGroup.Add', { Id: id }).catch(() => {}),
       addComponentControl: (id, compName, controlName) =>
@@ -134,6 +160,12 @@ const QRC = (() => {
           Id: id,
           Component: { Name: compName, Controls: [{ Name: controlName }] },
         }).catch(() => {}),
+      /** Batched form of addComponentControl — one RPC for a whole component. */
+      addComponentControls: (id, compName, controlNames) =>
+        rpc('ChangeGroup.AddComponentControl', {
+          Id: id,
+          Component: { Name: compName, Controls: controlNames.map(n => ({ Name: n })) },
+        }).catch(e => console.error('[QRC] ChangeGroup add failed:', compName, '→', e.message)),
       poll(id, rateMs, cb) {
         cgCbs.set(id, cb);
         rpc('ChangeGroup.AutoPoll', { Id: id, Rate: rateMs / 1000 }).catch(() => {});
@@ -2061,6 +2093,7 @@ QRC.on('EngineStatus', function(status) {
     loadOutputState();
     loadPatchState();
     loadRoutingState();
+    subscribeState();
   }
 });
 
@@ -3813,6 +3846,251 @@ document.getElementById('proc-comp-bypass').addEventListener('click', function()
       QRC.component.set(window.procSheet.compComp, [{Name:ctrlName, Value:parseFloat(this.value)}]);
   });
 });
+</script>
+<!-- ── LIVE STATE SUBSCRIPTION ──────────────────────────────────────────────── -->
+<script>
+// The load*State() functions read every fader, mute, route, label and phantom
+// setting exactly once, when EngineStatus first arrives. Nothing kept them in
+// sync afterwards, so a change made in Q-SYS Designer (or by the MIDI bridge,
+// or in another browser tab) never reached this page until it was reloaded.
+//
+// This block puts all of that state into one ChangeGroup alongside the existing
+// meter groups, so the Core pushes deltas for it the same way it pushes VU.
+
+const STATE_CG        = 'ui_state';
+const STATE_POLL_MS   = 250;   // state, unlike VU, does not need 40 ms
+
+// Component name → Map(control name → [handler, …]).
+// A control can legitimately have several handlers: the Labels component drives
+// input strips, bus strips and the sends bar, and 'Mains.Gain' backs both the
+// AUX 1 bus strip and the Mains output strip.
+const stateHandlers = new Map();
+
+function onState(compName, controlName, fn) {
+  let byControl = stateHandlers.get(compName);
+  if (!byControl) { byControl = new Map(); stateHandlers.set(compName, byControl); }
+  const fns = byControl.get(controlName);
+  if (fns) fns.push(fn); else byControl.set(controlName, [fn]);
+}
+
+// ── strip repaint helpers (mirror what load*State() does) ────────────────────
+function paintInputFader(chId, db) {
+  const strip = document.getElementById('strip-' + chId);
+  if (!strip) return;
+  setFaderPos(strip, dbToPos(db));
+  strip.querySelector('.db-readout').textContent = formatDb(db);
+}
+
+function paintMuteBtn(strip, muted) {
+  if (!strip) return;
+  strip.classList.toggle('muted', muted);
+  strip.querySelector('.mute-btn').textContent = muted ? 'MUTED' : 'MUTE';
+}
+
+// ── handler registration ─────────────────────────────────────────────────────
+function buildStateHandlers() {
+  stateHandlers.clear();
+
+  // ── Input strips: mute (Input.Mixer) + gain (<pin>.Gain) ───────────────────
+  BANKS.all.forEach(ch => {
+    onState('Input.Mixer', `input.${ch.mixerSlot}.mute`, v => {
+      chState[ch.id].mute = !!v;
+      paintMuteBtn(document.getElementById('strip-' + ch.id), chState[ch.id].mute);
+    });
+    onState(ch.labelPin + '.Gain', 'gain', v => {
+      chState[ch.id].gain = v;
+      if (!sendsMode) paintInputFader(ch.id, v);   // in sends mode the fader shows a send
+    });
+    onState('Labels', ch.labelPin, v => {
+      if (!v) return;
+      inputLabels[ch.id] = v;
+      const el = document.querySelector(`#strip-${ch.id} .strip-label`);
+      if (el) el.textContent = v;
+    });
+  });
+
+  // ── Input → bus crosspoints: routing matrix cells ──────────────────────────
+  ROUTING_INPUTS.forEach(inp => ROUTING_BUSES.forEach(bus => {
+    onState('Input.Mixer', `input.${inp.n}.output.${bus.m}.gain`, v => {
+      ibGain[inp.n] = ibGain[inp.n] || {};
+      ibGain[inp.n][bus.m] = v;
+      updateCell(cellId('ib', inp.n, bus.m), v);
+    });
+  }));
+
+  // ── Input → bus crosspoints: sends-mode faders on the INPUTS tab ───────────
+  BANKS.all.forEach(ch => BUSES.forEach((bus, busIdx) => {
+    onState('Input.Mixer', `input.${ch.mixerSlot}.output.${bus.outputSlot}.gain`, v => {
+      chState[ch.id].sendsGain[busIdx] = v;
+      if (sendsMode && sendsBusIdx === busIdx) paintInputFader(ch.id, v);
+    });
+  }));
+
+  // ── Sends-bar bus labels ───────────────────────────────────────────────────
+  BUSES.forEach((bus, i) => onState('Labels', bus.labelPin, v => {
+    if (!v || busLabels[i] === v) return;
+    busLabels[i] = v;
+    buildSendsBar();   // recreates the buttons, so restore the active one
+    if (sendsMode && sendsBusIdx !== null) {
+      document.querySelectorAll('.sends-bus-btn').forEach(b => {
+        b.classList.toggle('active', parseInt(b.dataset.busIdx) === sendsBusIdx);
+      });
+    }
+  }));
+
+  // ── Bus strips: mute (Bus.Mixer) + gain (<pin>.Gain) + label ───────────────
+  BUS_STRIPS.forEach(bus => {
+    onState('Bus.Mixer', `input.${bus.mixerSlot}.mute`, v => {
+      busState[bus.id].mute = !!v;
+      paintMuteBtn(document.getElementById('busstrip-' + bus.id), busState[bus.id].mute);
+    });
+    onState(bus.labelPin + '.Gain', 'gain', v => {
+      busState[bus.id].gain = v;
+      if (busSendsMode) return;
+      const strip = document.getElementById('busstrip-' + bus.id);
+      if (!strip) return;
+      setFaderPos(strip, dbToPos(v));
+      strip.querySelector('.db-readout').textContent = formatDb(v);
+    });
+    onState('Labels', bus.labelPin, v => {
+      if (!v) return;
+      busChannelLabels[bus.id] = v;
+      const el = document.querySelector(`#busstrip-${bus.id} .strip-label`);
+      if (el) el.textContent = v;
+    });
+  });
+
+  // ── Bus → output crosspoints: matrix cells + bus sends-mode faders ─────────
+  BUS_OUT_ROWS.forEach(bus => BUS_OUT_COLS.forEach(col => {
+    onState('Bus.Mixer', `input.${bus.mixerSlot}.output.${col.outSlot}.gain`, v => {
+      boGain[bus.id] = boGain[bus.id] || {};
+      boGain[bus.id][col.outSlot] = v;
+      updateCell(cellId('bo', bus.id, col.outSlot), v);
+    });
+  }));
+
+  BUS_STRIPS.forEach(bus => BUS_OUTPUTS.forEach((out, sendIdx) => {
+    onState('Bus.Mixer', `input.${bus.mixerSlot}.output.${out.outSlot}.gain`, v => {
+      busState[bus.id].sendsGain[sendIdx] = v;
+      if (!busSendsMode || busSendsBusIdx !== sendIdx) return;
+      const strip = document.getElementById('busstrip-' + bus.id);
+      if (!strip) return;
+      setFaderPos(strip, dbToPos(v));
+      strip.querySelector('.db-readout').textContent = formatDb(v);
+    });
+  }));
+
+  // ── Output strips: gain, mute, delay, label ────────────────────────────────
+  OUTPUT_STRIPS.forEach(s => {
+    onState(s.gainComp, 'gain', v => {
+      outState[s.id].gain = v;
+      const strip = document.getElementById('strip-out-' + s.id);
+      if (!strip) return;
+      strip.querySelector('.fader-handle').style.bottom = (dbToPos(v) * 100) + '%';
+      strip.querySelector('.db-readout').textContent = formatDb(v);
+    });
+    onState(s.gainComp, 'mute', v => {
+      outState[s.id].mute = !!v;
+      paintMuteBtn(document.getElementById('strip-out-' + s.id), outState[s.id].mute);
+    });
+    onState(s.delayComp, 'delay', v => {
+      outState[s.id].delay = v;
+      const el = document.getElementById('delay-val-' + s.id);
+      if (el) el.textContent = Number(v).toFixed(1) + ' ms';
+    });
+    onState('Labels', s.labelPin, v => {
+      if (!v) return;
+      outLabels[s.id] = v;
+      const el = document.querySelector(`#strip-out-${s.id} .strip-label`);
+      if (el) el.textContent = v;
+    });
+  });
+
+  // ── Phantom power ──────────────────────────────────────────────────────────
+  for (let ch = 1; ch <= 8; ch++) {
+    onState('Analog.Inputs', `channel.${ch}.phantom.power`, v => {
+      const btn = document.querySelector(`#phantom-grid [data-channel="${ch}"]`);
+      if (!btn) return;
+      const on = !!v;
+      btn.classList.toggle('on', on);
+      btn.textContent = on ? '48V ●' : '48V';
+    });
+  }
+
+  // ── Routers ────────────────────────────────────────────────────────────────
+  // Each router exposes a boolean crosspoint per output/input pair; exactly one
+  // is true per output, so the true one names the current source.
+  const ROUTER_DEFS = [
+    { comp:'Input.Router',  tbody:'router-tbody',
+      outs: ROUTER_ROWS.reduce((a, r) => a.concat(r.out), []), inputs: 24 },
+    { comp:'Output.Router', tbody:'output-router-tbody',
+      outs: OUTPUT_ROUTER_ROWS.map(r => r.out), inputs: 8 },
+    { comp:'Bus.Router',    tbody:'bus-router-tbody',
+      outs: BUS_ROUTER_ROWS.map(r => r.out), inputs: 14 },
+  ];
+  ROUTER_DEFS.forEach(def => def.outs.forEach(out => {
+    for (let inp = 1; inp <= def.inputs; inp++) {
+      onState(def.comp, `output.${out}.input.${inp}.select`, v => {
+        if (!v) return;   // only the newly-selected crosspoint identifies the source
+        const select = document.querySelector(`#${def.tbody} [data-output="${out}"]`);
+        if (select) select.value = String(inp);
+      });
+    }
+  }));
+}
+
+// ── dispatch ─────────────────────────────────────────────────────────────────
+let warnedMissingComponent = false;
+
+function dispatchStateChange(change) {
+  let byControl = change.Component ? stateHandlers.get(change.Component) : null;
+  let compName = change.Component;
+
+  if (!compName) {
+    // Defensive: if the Core ever omits Component, only act when the control
+    // name is unambiguous across every component we subscribed to.
+    const matches = [];
+    stateHandlers.forEach((controls, name) => { if (controls.has(change.Name)) matches.push(name); });
+    if (matches.length !== 1) {
+      if (!warnedMissingComponent) {
+        warnedMissingComponent = true;
+        console.warn('[state] poll entry without Component, ambiguous:', change.Name);
+      }
+      return;
+    }
+    compName = matches[0];
+    byControl = stateHandlers.get(compName);
+  }
+
+  const fns = byControl?.get(change.Name);
+  if (!fns) return;
+  if (QRC.isLocalEcho(compName, change.Name, change.Value)) return;
+  fns.forEach(fn => {
+    try { fn(change.Value, change); }
+    catch (e) { console.error('[state] handler failed:', compName, change.Name, e); }
+  });
+}
+
+// ── subscribe ────────────────────────────────────────────────────────────────
+// Called on every EngineStatus, i.e. on first connect and again after each
+// reconnect — the relay opens a fresh TCP socket, so the Core-side ChangeGroup
+// is gone and has to be rebuilt.
+function subscribeState() {
+  buildStateHandlers();
+
+  QRC.changeGroup.create(STATE_CG);
+  let controlCount = 0;
+  stateHandlers.forEach((byControl, compName) => {
+    const names = Array.from(byControl.keys());
+    controlCount += names.length;
+    QRC.changeGroup.addComponentControls(STATE_CG, compName, names);
+  });
+  console.log(`[state] subscribed ${controlCount} controls across ${stateHandlers.size} components`);
+
+  QRC.changeGroup.poll(STATE_CG, STATE_POLL_MS, function(changes) {
+    changes.forEach(dispatchStateChange);
+  });
+}
 </script>
 </body>
 </html>
