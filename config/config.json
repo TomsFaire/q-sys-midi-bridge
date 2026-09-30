@@ -146,8 +146,8 @@
       },
       "qsys": {
         "type": "component_control",
-        "component": "Bus.Mixer",
-        "control": "output.1.gain",
+        "component": "Mains.Gain",
+        "control": "gain",
         "min": -100,
         "max": 20
       }
@@ -460,8 +460,8 @@
       },
       "qsys": {
         "type": "toggle",
-        "component": "Bus.Mixer",
-        "control": "output.1.mute"
+        "component": "Mains.Gain",
+        "control": "mute"
       }
     },
     {
@@ -473,12 +473,12 @@
       },
       "qsys": {
         "type": "toggle",
-        "component": "Bus.Mixer",
-        "control": "output.2.mute"
+        "component": "ZoomTX.Gain",
+        "control": "mute"
       }
     },
     {
-      "label": "Solo",
+      "label": "Rec Mute",
       "midi": {
         "type": "note_on",
         "channel": 1,
@@ -486,8 +486,8 @@
       },
       "qsys": {
         "type": "toggle",
-        "component": "Bus.Mixer",
-        "control": "output.3.mute"
+        "component": "Rec.Gain",
+        "control": "mute"
       }
     }
   ],
@@ -502,9 +502,9 @@
       { "component": "Sptfy.Gain",  "control": "mute", "midi": { "channel": 1, "note": 16 } },
       { "component": "ZoomRX.Gain", "control": "mute", "midi": { "channel": 1, "note": 19 } },
       { "component": "Slides.Gain", "control": "mute", "midi": { "channel": 1, "note": 22 } },
-      { "component": "Bus.Mixer",   "control": "output.1.mute", "midi": { "channel": 1, "note": 25 } },
-      { "component": "Bus.Mixer",   "control": "output.2.mute", "midi": { "channel": 1, "note": 26 } },
-      { "component": "Bus.Mixer",   "control": "output.3.mute", "midi": { "channel": 1, "note": 27 } }
+      { "component": "Mains.Gain",  "control": "mute", "midi": { "channel": 1, "note": 25 } },
+      { "component": "ZoomTX.Gain", "control": "mute", "midi": { "channel": 1, "note": 26 } },
+      { "component": "Rec.Gain",    "control": "mute", "midi": { "channel": 1, "note": 27 } }
     ]
   }
 }

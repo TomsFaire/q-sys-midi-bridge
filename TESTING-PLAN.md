@@ -5,7 +5,7 @@
 
 ## What's testable today vs. what's blocked
 
-**Testable now** — Input.Mixer faders, mutes, LED feedback, Matrix.Mains and Matrix.ZoomTX gain/mute.
+**Testable now** — Gain block faders, mutes, LED feedback, Matrix.Mains and Matrix.ZoomTX gain/mute.
 
 **Blocked until Designer rebuild** — Row A trim knobs (Mic.01.Gain–Mic.08.Gain), Row B HPF knobs (Mic.01.HPF–Mic.08.HPF), Row C compressor knobs (BusMicRoom.Comp / BusMicZoom.Comp). These components live inside Channel Groups and aren't QRC-addressable yet. Config entries are already correct and commented out — just uncomment after rebuild.
 
@@ -46,13 +46,13 @@ If either shows disconnected, see Troubleshooting at the bottom.
 
 ### Test 1 — Channel faders 1–8
 
-**What:** MIDImix faders → `Input.Mixer` `input.{n}.gain`
+**What:** MIDImix faders → the channel Gain block, e.g. `Mic.01.Gain` `gain`
 
 **How to test:**
-1. In Q-SYS Designer, open the running design and double-click `Input.Mixer` to open its controls panel
+1. In Q-SYS Designer, open the running design and double-click `Mic.01.Gain` to open its controls panel
 2. Move fader 1 on the MIDImix (leftmost fader)
-3. Watch `input.1.gain` update in the Designer panel
-4. Repeat for faders 2–8
+3. Watch `gain` update in the Designer panel
+4. Repeat for faders 2–8 against their own Gain blocks (`Mic.02.Gain` … `Mic.04.Gain`, then `Styb.Gain`, `Sptfy.Gain`, `ZoomRX.Gain`, `Slides.Gain`)
 
 **Pass:** Each fader movement causes the matching gain control to update. The range is −100 dB (fader bottom) to +10 dB (fader top).
 
@@ -62,11 +62,11 @@ If either shows disconnected, see Troubleshooting at the bottom.
 
 ### Test 2 — Channel mutes 1–8
 
-**What:** MIDImix mute buttons → `Input.Mixer` `input.{n}.mute` toggle
+**What:** MIDImix mute buttons → the channel Gain block, e.g. `Mic.01.Gain` `mute` toggle
 
 **How to test:**
 1. Press mute button for channel 1 (bottom row of buttons, leftmost)
-2. Confirm `input.1.mute` goes to 1 in Designer
+2. Confirm `Mic.01.Gain` `mute` goes to 1 in Designer
 3. Press again — should toggle back to 0
 4. LED on the MIDImix should light when muted, off when unmuted
 
@@ -79,7 +79,7 @@ If either shows disconnected, see Troubleshooting at the bottom.
 **What:** Q-SYS pushes mute state back to MIDImix LEDs via ChangeGroup poll
 
 **How to test:**
-1. In Q-SYS Designer, manually click `input.1.mute` to mute channel 1 (not from MIDI)
+1. In Q-SYS Designer, manually click `mute` on `Mic.01.Gain` to mute channel 1 (not from MIDI)
 2. Within ~50ms, the MIDImix mute LED for channel 1 should light
 3. Unmute in Designer — LED goes off
 
@@ -331,7 +331,7 @@ Budget under 5 minutes total once on site with the gear.
 
 **(a) Physical fader test**
 1. With the app running and MIDImix connected, open the running design in
-   Q-Sys Designer and double-click `Input.Mixer` (or whichever component a
+   Q-Sys Designer and double-click `Mic.01.Gain` (or whichever component a
    fader is mapped to) to show its live controls.
 2. Move one physical MIDImix fader.
 3. Confirm the paired QRC control updates in Designer in real time.
