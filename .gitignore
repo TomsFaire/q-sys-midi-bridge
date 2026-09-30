@@ -7,3 +7,11 @@ Icon?
 splendid-brewing-knuth.md
 .superpowers/
 .worktrees/
+
+# secrets / credentials — never commit; use .env.example as the template
+.env
+.env.local
+.env.*.local
+
+# Claude plan files
+.claude/plans/
