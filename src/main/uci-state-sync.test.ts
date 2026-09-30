@@ -133,7 +133,8 @@ function loadUci(): Any {
   // an expression evaluated in the same context.
   const api: Any = vm.runInContext(
     '({ QRC, chState, busState, outState, ibGain, boGain, stateHandlers,' +
-    '   subscribeState, dispatchStateChange })',
+    '   subscribeState, dispatchStateChange, toggleMute, loadInitialState, BANKS,' +
+    '   toggleBusMute, loadBusState, BUS_STRIPS })',
     ctx,
   )
   return { ...api, doc, sent }
@@ -163,12 +164,14 @@ test('subscribeState registers the individual controls the UI displays', () => {
   t.subscribeState()
   const has = (comp: string, ctrl: string) => !!t.stateHandlers.get(comp)?.has(ctrl)
 
-  assert.ok(has('Input.Mixer', 'input.1.mute'), 'input strip mute')
-  assert.ok(has('Input.Mixer', 'input.12.mute'), 'last input strip mute')
+  assert.ok(has('Mic.01.Gain', 'mute'), 'input strip mute')
+  assert.ok(has('Slides.Gain', 'mute'), 'last input strip mute')
+  assert.ok(!has('Input.Mixer', 'input.1.mute'), 'mixer crosspoint is not the mute')
   assert.ok(has('Input.Mixer', 'input.1.output.1.gain'), 'input→bus crosspoint')
   assert.ok(has('Input.Mixer', 'input.12.output.7.gain'), 'last routing crosspoint')
   assert.ok(has('Input.Mixer', 'input.1.output.11.gain'), 'sends-mode crosspoint (ZoomRtn)')
-  assert.ok(has('Bus.Mixer', 'input.1.mute'), 'bus strip mute')
+  assert.ok(has('MicRoom.Gain', 'mute'), 'bus strip mute')
+  assert.ok(!has('Bus.Mixer', 'input.1.mute'), 'bus mixer crosspoint is not the mute')
   assert.ok(has('Bus.Mixer', 'input.17.output.5.gain'), 'bus→output crosspoint (AUX 3 → Rec)')
   assert.ok(has('Mains.Gain', 'gain') && has('Mains.Gain', 'mute'), 'output gain + mute')
   assert.ok(has('Mains.Delay', 'delay'), 'output delay')
@@ -184,10 +187,10 @@ test('a mute change from the Core updates channel state', () => {
   t.subscribeState()
   assert.equal(t.chState.mic1.mute, false)
 
-  t.dispatchStateChange({ Component: 'Input.Mixer', Name: 'input.1.mute', Value: 1 })
+  t.dispatchStateChange({ Component: 'Mic.01.Gain', Name: 'mute', Value: 1 })
   assert.equal(t.chState.mic1.mute, true)
 
-  t.dispatchStateChange({ Component: 'Input.Mixer', Name: 'input.1.mute', Value: 0 })
+  t.dispatchStateChange({ Component: 'Mic.01.Gain', Name: 'mute', Value: 0 })
   assert.equal(t.chState.mic1.mute, false)
 })
 
@@ -243,9 +246,9 @@ test('our own writes are not re-applied, but a different value always is', () =>
   t.subscribeState()
 
   // Local mute: the echo carrying the same value is ignored…
-  t.QRC.component.set('Input.Mixer', [{ Name: 'input.2.mute', Value: 1 }])
+  t.QRC.component.set('Mic.02.Gain', [{ Name: 'mute', Value: 1 }])
   t.chState.mic2.mute = false   // pretend the UI has since been reset
-  t.dispatchStateChange({ Component: 'Input.Mixer', Name: 'input.2.mute', Value: 1 })
+  t.dispatchStateChange({ Component: 'Mic.02.Gain', Name: 'mute', Value: 1 })
   assert.equal(t.chState.mic2.mute, false, 'echo of our own write should be ignored')
 
   // …but a value we did not write is somebody else's change and must land.
@@ -260,4 +263,89 @@ test('unknown components and controls are ignored without throwing', () => {
   t.dispatchStateChange({ Component: 'Nope.Gain', Name: 'gain', Value: 1 })
   t.dispatchStateChange({ Component: 'Input.Mixer', Name: 'input.99.mute', Value: 1 })
   t.dispatchStateChange({ Name: 'gain', Value: 1 })   // no Component, ambiguous
+})
+
+// The MIDI bridge, its mute LEDs and the Q-SYS design all mute at the gain
+// block, before the effects chain. The UCI used to mute at the Input.Mixer
+// crosspoint instead, so the two surfaces drove different controls and neither
+// one reflected the other. See docs/mute-alignment-handoff.md.
+test('pressing a UCI mute writes the gain block, not the mixer crosspoint', () => {
+  const t = loadUci()
+  const mic1 = t.BANKS.all.find((c: Any) => c.id === 'mic1')
+
+  t.toggleMute(mic1)
+
+  const sets = t.sent.filter((m: Any) => m.method === 'Component.Set')
+  const mute = sets.find((m: Any) => m.params.Controls.some((c: Any) => c.Name === 'mute'))
+  assert.ok(mute, 'expected a Component.Set carrying a mute control')
+  assert.equal(mute.params.Name, 'Mic.01.Gain')
+  assert.equal(mute.params.Controls[0].Value, 1)
+  assert.ok(
+    !sets.some((m: Any) => m.params.Name === 'Input.Mixer'),
+    'the mixer crosspoint must not be muted',
+  )
+})
+
+test('loadInitialState reads the input mute from the gain block', () => {
+  const t = loadUci()
+  t.loadInitialState()
+
+  const gets = t.sent.filter((m: Any) => m.method === 'Component.Get')
+  const micGet = gets.find((m: Any) => m.params.Name === 'Mic.01.Gain')
+  assert.ok(micGet, 'expected a Component.Get for Mic.01.Gain')
+  const names = micGet.params.Controls.map((c: Any) => (typeof c === 'string' ? c : c.Name))
+  assert.ok(names.includes('mute'), 'initial read must include mute')
+  assert.ok(names.includes('gain'), 'initial read must still include gain')
+  assert.ok(
+    !gets.some((m: Any) => m.params.Name === 'Input.Mixer' &&
+      m.params.Controls.some((c: Any) => String(c.Name ?? c).endsWith('.mute'))),
+    'no mute should be read from the mixer',
+  )
+})
+
+// Bus strips have the same split the input strips had: the fader already drove
+// <pin>.Gain while the mute still drove the Bus.Mixer crosspoint.
+test('a bus mute change from the Core updates bus state', () => {
+  const t = loadUci()
+  t.subscribeState()
+  assert.equal(t.busState.microom.mute, false)
+
+  t.dispatchStateChange({ Component: 'MicRoom.Gain', Name: 'mute', Value: 1 })
+  assert.equal(t.busState.microom.mute, true)
+
+  t.dispatchStateChange({ Component: 'MicRoom.Gain', Name: 'mute', Value: 0 })
+  assert.equal(t.busState.microom.mute, false)
+})
+
+test('pressing a UCI bus mute writes the gain block, not the mixer crosspoint', () => {
+  const t = loadUci()
+  const microom = t.BUS_STRIPS.find((b: Any) => b.id === 'microom')
+
+  t.toggleBusMute(microom)
+
+  const sets = t.sent.filter((m: Any) => m.method === 'Component.Set')
+  const mute = sets.find((m: Any) => m.params.Controls.some((c: Any) => c.Name === 'mute'))
+  assert.ok(mute, 'expected a Component.Set carrying a mute control')
+  assert.equal(mute.params.Name, 'MicRoom.Gain')
+  assert.equal(mute.params.Controls[0].Value, 1)
+  assert.ok(
+    !sets.some((m: Any) => m.params.Name === 'Bus.Mixer'),
+    'the bus mixer crosspoint must not be muted',
+  )
+})
+
+test('loadBusState reads the bus mute from the gain block', () => {
+  const t = loadUci()
+  t.loadBusState()
+
+  const gets = t.sent.filter((m: Any) => m.method === 'Component.Get')
+  const busGet = gets.find((m: Any) => m.params.Name === 'MicRoom.Gain')
+  assert.ok(busGet, 'expected a Component.Get for MicRoom.Gain')
+  const names = busGet.params.Controls.map((c: Any) => (typeof c === 'string' ? c : c.Name))
+  assert.ok(names.includes('mute'), 'initial read must include mute')
+  assert.ok(names.includes('gain'), 'initial read must still include gain')
+  assert.ok(
+    !gets.some((m: Any) => m.params.Name === 'Bus.Mixer'),
+    'no mute should be read from the bus mixer',
+  )
 })

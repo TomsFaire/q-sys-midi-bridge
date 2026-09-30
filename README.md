@@ -62,7 +62,7 @@ Every signal path uses a **Gain block before it enters a mixer or any effects**.
 - **All mutes happen at the Gain block** — do not mute at the mixer input; mute at the Gain block for that signal path
 - **UCI faders and buttons must target the same Gain blocks** as the MIDI controller — otherwise MIDI and UCI will fight each other
 
-The **only exception** is final output control: the mixer output gain and output mute (e.g. `Bus.Mixer output.1.gain` / `output.1.mute`) are the correct place to adjust final output level and kill the house mix.
+This holds for **every** stage, including the final output. Master level and the kill for the house mix belong on the output chain's Gain block (`Mains.Gain`, `ZoomTX.Gain`, `Rec.Gain`), not on `Bus.Mixer output.N.gain` / `output.N.mute`. The mixer outputs are mono legs of a stereo pair, so driving one of them moves half the mix — and the UCI output strips read the Gain blocks, so anything mapped to the mixer outputs cannot stay in sync with the UCI.
 
 This means in your Q-Sys design each channel looks like:
 
@@ -70,7 +70,7 @@ This means in your Q-Sys design each channel looks like:
 [Analog/USB Input] → [Mic.01.Gain (gain + mute)] → [Input.Mixer] → [Bus.Mixer] → [Output]
 ```
 
-And in `config.json`, faders and mutes always target the Gain block component (`Mic.01.Gain`, `Styb.Gain`, etc.), never `Input.Mixer input.N.gain/mute`.
+And in `config.json`, faders and mutes always target the Gain block component (`Mic.01.Gain`, `Styb.Gain`, `MicRoom.Gain`, `Mains.Gain`, etc.), never `Input.Mixer input.N.gain/mute` or `Bus.Mixer input.N.mute` / `output.N.mute`.
 
 ### What you need in the design
 
@@ -282,7 +282,7 @@ The three knob rows give you 24 CCs. Only Row A is wired by default (pre-fader t
 | Row B | Monitor/IEM send level | `input.N.send.1` or similar, min 0 max 1 |
 | Row C (18–22 series) | EQ band gain | Component per-mic EQ band, min -12 max 12 |
 | Row C | Compression threshold | Compressor component, `threshold`, min -40 max 0 |
-| Solo buttons | Bus mute toggles | `Bus.Mixer`, `input.N.mute` |
+| Solo buttons | Bus mute toggles | Bus Gain block, e.g. `MicRoom.Gain`, `mute` |
 | Solo buttons | Snapshot recall | `type: snapshot` per button |
 
 The control names for sub-components (HPF, compressor, EQ) depend on how your Q-Sys design is structured. If they're inside a larger component rather than individual blocks, you may not be able to address them via `Component.Set` — in that case, expose them as Named Controls in Designer and use `type: named_control`.

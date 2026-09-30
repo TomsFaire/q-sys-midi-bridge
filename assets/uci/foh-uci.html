@@ -1898,10 +1898,7 @@ function toggleMute(ch) {
     strip.classList.toggle('muted', muted);
     strip.querySelector('.mute-btn').textContent = muted ? 'MUTED' : 'MUTE';
   }
-  QRC.component.set('Input.Mixer', [{
-    Name: `input.${ch.mixerSlot}.mute`,
-    Value: muted ? 1 : 0
-  }]);
+  QRC.component.set(ch.labelPin + '.Gain', [{ Name: 'mute', Value: muted ? 1 : 0 }]);
 }
 
 // ── VU update ─────────────────────────────────────────────────────────────────
@@ -1988,27 +1985,19 @@ function setConnStatus(state, msg) {
 function loadInitialState() {
   const allChannels = [...BANKS.mics, ...BANKS.stereo];
 
-  // Load mute state (mixer) + gain (pre-effects Gain block) for all 12 input slots
+  // Gain and mute both live on the pre-effects Gain block, which is also what
+  // the MIDI bridge and its mute LEDs drive — one Component.Get covers both.
   allChannels.forEach(ch => {
-    QRC.component.get('Input.Mixer',
-      [`input.${ch.mixerSlot}.mute`],
-      function(controls) {
-        controls.forEach(c => {
-          if (c.Name.endsWith('.mute')) chState[ch.id].mute = !!c.Value;
-        });
-        const strip = document.getElementById('strip-' + ch.id);
-        if (strip) {
-          strip.classList.toggle('muted', chState[ch.id].mute);
-          strip.querySelector('.mute-btn').textContent = chState[ch.id].mute ? 'MUTED' : 'MUTE';
-        }
-      }
-    );
-    QRC.component.get(ch.labelPin + '.Gain', ['gain'], function(controls) {
+    QRC.component.get(ch.labelPin + '.Gain', ['gain', 'mute'], function(controls) {
       controls.forEach(c => {
         if (c.Name === 'gain') chState[ch.id].gain = c.Value;
+        else if (c.Name === 'mute') chState[ch.id].mute = !!c.Value;
       });
       const strip = document.getElementById('strip-' + ch.id);
-      if (strip && !sendsMode) {
+      if (!strip) return;
+      strip.classList.toggle('muted', chState[ch.id].mute);
+      strip.querySelector('.mute-btn').textContent = chState[ch.id].mute ? 'MUTED' : 'MUTE';
+      if (!sendsMode) {
         setFaderPos(strip, dbToPos(chState[ch.id].gain));
         strip.querySelector('.db-readout').textContent = formatDb(chState[ch.id].gain);
       }
@@ -2300,7 +2289,7 @@ function toggleBusMute(bus) {
     strip.classList.toggle('muted', muted);
     strip.querySelector('.mute-btn').textContent = muted ? 'MUTED' : 'MUTE';
   }
-  QRC.component.set('Bus.Mixer', [{ Name: `input.${bus.mixerSlot}.mute`, Value: muted ? 1 : 0 }]);
+  QRC.component.set(bus.labelPin + '.Gain', [{ Name: 'mute', Value: muted ? 1 : 0 }]);
 }
 
 function updateBusVU(id, db) {
@@ -2342,22 +2331,16 @@ document.getElementById('buses-sends-exit').addEventListener('click', () => {
 
 function loadBusState() {
   BUS_STRIPS.forEach(bus => {
-    QRC.component.get('Bus.Mixer', [`input.${bus.mixerSlot}.mute`], function(controls) {
-      controls.forEach(c => {
-        if (c.Name.endsWith('.mute')) busState[bus.id].mute = !!c.Value;
-      });
-      const strip = document.getElementById('busstrip-' + bus.id);
-      if (strip) {
-        strip.classList.toggle('muted', busState[bus.id].mute);
-        strip.querySelector('.mute-btn').textContent = busState[bus.id].mute ? 'MUTED' : 'MUTE';
-      }
-    });
-    QRC.component.get(bus.labelPin + '.Gain', ['gain'], function(controls) {
+    QRC.component.get(bus.labelPin + '.Gain', ['gain', 'mute'], function(controls) {
       controls.forEach(c => {
         if (c.Name === 'gain') busState[bus.id].gain = c.Value;
+        else if (c.Name === 'mute') busState[bus.id].mute = !!c.Value;
       });
       const strip = document.getElementById('busstrip-' + bus.id);
-      if (strip && !busSendsMode) {
+      if (!strip) return;
+      strip.classList.toggle('muted', busState[bus.id].mute);
+      strip.querySelector('.mute-btn').textContent = busState[bus.id].mute ? 'MUTED' : 'MUTE';
+      if (!busSendsMode) {
         setFaderPos(strip, dbToPos(busState[bus.id].gain));
         strip.querySelector('.db-readout').textContent = formatDb(busState[bus.id].gain);
       }
@@ -3891,9 +3874,9 @@ function paintMuteBtn(strip, muted) {
 function buildStateHandlers() {
   stateHandlers.clear();
 
-  // ── Input strips: mute (Input.Mixer) + gain (<pin>.Gain) ───────────────────
+  // ── Input strips: gain + mute (<pin>.Gain) ────────────────────────────────
   BANKS.all.forEach(ch => {
-    onState('Input.Mixer', `input.${ch.mixerSlot}.mute`, v => {
+    onState(ch.labelPin + '.Gain', 'mute', v => {
       chState[ch.id].mute = !!v;
       paintMuteBtn(document.getElementById('strip-' + ch.id), chState[ch.id].mute);
     });
@@ -3938,9 +3921,9 @@ function buildStateHandlers() {
     }
   }));
 
-  // ── Bus strips: mute (Bus.Mixer) + gain (<pin>.Gain) + label ───────────────
+  // ── Bus strips: gain + mute (<pin>.Gain) + label ──────────────────────────
   BUS_STRIPS.forEach(bus => {
-    onState('Bus.Mixer', `input.${bus.mixerSlot}.mute`, v => {
+    onState(bus.labelPin + '.Gain', 'mute', v => {
       busState[bus.id].mute = !!v;
       paintMuteBtn(document.getElementById('busstrip-' + bus.id), busState[bus.id].mute);
     });
