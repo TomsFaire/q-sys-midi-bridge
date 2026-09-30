@@ -78,7 +78,7 @@
       }
     },
     {
-      "label": "Stby Fader",
+      "label": "Styb Fader",
       "midi": {
         "type": "cc",
         "channel": 7,
@@ -86,7 +86,7 @@
       },
       "qsys": {
         "type": "component_control",
-        "component": "Stby.Gain",
+        "component": "Styb.Gain",
         "control": "gain",
         "min": -100,
         "max": 20
@@ -400,7 +400,7 @@
       }
     },
     {
-      "label": "Stby Mute",
+      "label": "Styb Mute",
       "midi": {
         "type": "cc",
         "channel": 1,
@@ -408,7 +408,7 @@
       },
       "qsys": {
         "type": "toggle",
-        "component": "Stby.Gain",
+        "component": "Styb.Gain",
         "control": "mute"
       }
     },
@@ -498,7 +498,7 @@
       { "component": "Mic.02.Gain", "control": "mute", "midi": { "channel": 1, "note": 4  } },
       { "component": "Mic.03.Gain", "control": "mute", "midi": { "channel": 1, "note": 7  } },
       { "component": "Mic.04.Gain", "control": "mute", "midi": { "channel": 1, "note": 10 } },
-      { "component": "Stby.Gain",   "control": "mute", "midi": { "channel": 1, "note": 13 } },
+      { "component": "Styb.Gain",   "control": "mute", "midi": { "channel": 1, "note": 13 } },
       { "component": "Sptfy.Gain",  "control": "mute", "midi": { "channel": 1, "note": 16 } },
       { "component": "ZoomRX.Gain", "control": "mute", "midi": { "channel": 1, "note": 19 } },
       { "component": "Slides.Gain", "control": "mute", "midi": { "channel": 1, "note": 22 } },

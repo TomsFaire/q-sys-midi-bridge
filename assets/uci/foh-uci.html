@@ -18,14 +18,14 @@
 
   Input.Mixer slots:
     1–8   = Mic.01–Mic.08 (mono)
-    9     = Stby  (stereo)
+    9     = Styb  (stereo)
     10    = Sptfy (stereo)
     11    = ZoomRX (stereo)
     12    = Slides (stereo)
 
   Meter channels (Meter component, meter2):
     1–8   = Mics post-EQ
-    9–10  = Stby L/R
+    9–10  = Styb L/R
     11–12 = Sptfy L/R
     13–14 = ZoomRX L/R
     15–16 = Slides L/R
@@ -1527,7 +1527,7 @@ const BANKS = {
     { id:'mic8',   mixerSlot:8,  meterCh:[8],     labelPin:'Mic.08', defaultLabel:'Mic 8',    isStereo:false },
   ],
   stereo: [
-    { id:'stby',   mixerSlot:9,  meterCh:[9,10],  labelPin:'Stby',   defaultLabel:'STYB', isStereo:true  },
+    { id:'stby',   mixerSlot:9,  meterCh:[9,10],  labelPin:'Styb',   defaultLabel:'STYB', isStereo:true  },
     { id:'sptfy',  mixerSlot:10, meterCh:[11,12], labelPin:'Sptfy',  defaultLabel:'Spotify',  isStereo:true  },
     { id:'zoomrx', mixerSlot:11, meterCh:[13,14], labelPin:'ZoomRX', defaultLabel:'Zoom RX',  isStereo:true  },
     { id:'slides', mixerSlot:12, meterCh:[15,16], labelPin:'Slides', defaultLabel:'Slides',   isStereo:true  },
