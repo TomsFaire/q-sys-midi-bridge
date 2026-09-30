@@ -1,6 +1,6 @@
 {
   "name": "midi-qsys-bridge",
-  "version": "0.2.7",
+  "version": "0.2.8",
   "description": "Akai MIDImix → Q-Sys FOH Mixer bridge",
   "main": "dist/main/index.js",
   "scripts": {
@@ -36,8 +36,12 @@
     "directories": {
       "output": "release"
     },
+    "afterPack": "scripts/after-pack.js",
     "mac": {
       "icon": "build/icon.icns",
+      "extendInfo": {
+        "NSLocalNetworkUsageDescription": "MIDI Q-Sys Bridge connects to your Q-SYS Core over the local network."
+      },
       "target": [
         {
           "target": "dmg",
