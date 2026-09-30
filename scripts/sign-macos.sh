@@ -12,8 +12,9 @@
 #      bundle has no _CodeSignature at all and reports the stock Electron
 #      signing identifier, which is not a stable identity for the app.
 #
-# Run after packaging, before distributing. Signs inside-out (frameworks and
-# helpers first, bundle last) so nested signatures stay valid.
+# Run after packaging, before distributing. Clears Finder detritus (xattrs and
+# custom-icon files) that codesign refuses, then signs inside-out (frameworks
+# and helpers first, bundle last) so nested signatures stay valid.
 #
 # Usage:  scripts/sign-macos.sh [path/to/App.app]
 #
@@ -48,7 +49,22 @@ else
   echo "==> inserted NSLocalNetworkUsageDescription"
 fi
 
-# 2. Sign inside-out.
+# 2. Strip Finder detritus, or codesign refuses the bundle outright. An
+#    electron-builder tree that has been near Finder picks up
+#    com.apple.FinderInfo / com.apple.ResourceFork xattrs and custom-icon
+#    files, which fail as:
+#      "resource fork, Finder information, or similar detritus not allowed"
+#      "unsealed contents present in the root directory of an embedded framework"
+#    Both are cosmetic Finder state, never app content, so removing them is safe.
+ICONS="$(find "$APP" -name 'Icon?' | wc -l | tr -d ' ')"
+if [[ "$ICONS" != "0" ]]; then
+  find "$APP" -name 'Icon?' -delete
+  echo "==> removed $ICONS Finder custom-icon file(s)"
+fi
+xattr -cr "$APP"
+echo "==> cleared extended attributes"
+
+# 3. Sign inside-out.
 echo "==> signing nested code"
 while IFS= read -r nested; do
   codesign --force --timestamp=none --sign "$IDENTITY" "$nested"
@@ -60,7 +76,7 @@ echo "==> signing bundle"
 codesign --force --timestamp=none --sign "$IDENTITY" \
   --identifier "$BUNDLE_ID" "$APP"
 
-# 3. Verify, and fail the build if the identity is not what we expect.
+# 4. Verify, and fail the build if the identity is not what we expect.
 codesign --verify --deep --strict "$APP"
 ACTUAL="$(codesign -d --verbose=2 "$APP" 2>&1 | sed -n 's/^Identifier=//p')"
 if [[ "$ACTUAL" != "$BUNDLE_ID" ]]; then
