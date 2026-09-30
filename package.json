@@ -1,6 +1,6 @@
 {
   "name": "midi-qsys-bridge",
-  "version": "0.2.6",
+  "version": "0.2.7",
   "description": "Akai MIDImix → Q-Sys FOH Mixer bridge",
   "main": "dist/main/index.js",
   "scripts": {
@@ -39,7 +39,12 @@
     "mac": {
       "icon": "build/icon.icns",
       "target": [
-        { "target": "dmg", "arch": ["arm64"] }
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64"
+          ]
+        }
       ],
       "category": "public.app-category.utilities",
       "identity": null,
