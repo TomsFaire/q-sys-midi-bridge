@@ -16,7 +16,7 @@ Analog/Dante/Flex input
 [Preamp / Trim]          ← hardware gain / digital trim
     │
     ▼
-[Gain Block]             ← Mic.0N.Gain, Stby.Gain, Sptfy.Gain, etc.
+[Gain Block]             ← Mic.0N.Gain, Styb.Gain, Sptfy.Gain, etc.
     │  ← MUTE LIVES HERE (pre-effects)
     ▼
 [Effects: HPF → EQ → Comp → AFC → Gate]
@@ -71,7 +71,7 @@ Fader dB range: confirm against the gain block's actual range in Q-SYS Designer 
 
 | Channel | Gain component | Mute control |
 |---|---|---|
-| Standby | `Stby.Gain` | `mute` |
+| STYB | `Styb.Gain` | `mute` |
 | Spotify | `Sptfy.Gain` | `mute` |
 | Zoom RX | `ZoomRX.Gain` | `mute` |
 | Slides | `Slides.Gain` | `mute` |
@@ -173,7 +173,7 @@ No code changes needed — the bridge already implements this. The only requirem
 |---|---|
 | `Q-SYS/General/foh-uci.html` | Input faders: `Input.Mixer:input.N.gain` → `Mic.0N.Gain:gain` |
 | `Q-SYS/General/foh-uci.html` | Input mutes: `Input.Mixer:input.N.mute` → `Mic.0N.Gain:mute` |
-| `Q-SYS/General/foh-uci.html` | Stereo source faders/mutes → `Stby.Gain`, `Sptfy.Gain`, `ZoomRX.Gain`, `Slides.Gain` |
+| `Q-SYS/General/foh-uci.html` | Stereo source faders/mutes → `Styb.Gain`, `Sptfy.Gain`, `ZoomRX.Gain`, `Slides.Gain` |
 | `config/config.json` | No change needed — bridge is already correct |
 | `docs/mute-alignment-handoff.md` | Mark resolved when UCI changes are deployed |
 

@@ -150,7 +150,7 @@ test('subscribeState registers every component the UI reads back', () => {
   for (const expected of [
     'Input.Mixer', 'Bus.Mixer', 'Labels', 'Analog.Inputs',
     'Input.Router', 'Output.Router', 'Bus.Router',
-    'Mic.01.Gain', 'Slides.Gain',              // input strip gains
+    'Mic.01.Gain', 'Styb.Gain', 'Slides.Gain', // input strip gains
     'MicRoom.Gain', 'ZoomRtn.Gain',            // bus strip gains
     'Mains.Gain', 'ZoomTX.Gain', 'Rec.Gain',   // output strip gains
     'Mains.Delay', 'ZoomTX.Delay', 'Rec.Delay',

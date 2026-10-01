@@ -31,10 +31,10 @@ Mic Inputs,Mic 08,Gain,Mic.08.Gain,Already named
 Mic Inputs,Mic 08,High-Pass Filter,Mic.08.HPF,Already named
 Mic Inputs,Mic 08,Low-Pass Filter,Mic.08.LPF,Already named
 Mic Inputs,Mic 08,Parametric Equalizer,Mic.08.EQ,Already named
-Stereo Inputs,STBY (STYBL/R),Stereo Gain,Stby.Gain,Stage-by / standby stereo source
-Stereo Inputs,STBY (STYBL/R),Stereo High-Pass Filter,Stby.HPF,
-Stereo Inputs,STBY (STYBL/R),Stereo Low-Pass Filter,Stby.LPF,
-Stereo Inputs,STBY (STYBL/R),Stereo Parametric Equalizer,Stby.EQ,
+Stereo Inputs,STYB (STYBL/R),Stereo Gain,Styb.Gain,Soundtrack Your Brand stereo source
+Stereo Inputs,STYB (STYBL/R),Stereo High-Pass Filter,Styb.HPF,
+Stereo Inputs,STYB (STYBL/R),Stereo Low-Pass Filter,Styb.LPF,
+Stereo Inputs,STYB (STYBL/R),Stereo Parametric Equalizer,Styb.EQ,
 Stereo Inputs,Spotify (SpotfyL/R),Stereo Gain,Sptfy.Gain,
 Stereo Inputs,Spotify (SpotfyL/R),Stereo High-Pass Filter,Sptfy.HPF,
 Stereo Inputs,Spotify (SpotfyL/R),Stereo Low-Pass Filter,Sptfy.LPF,
