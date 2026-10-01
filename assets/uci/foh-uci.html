@@ -171,9 +171,73 @@ const QRC = (() => {
         rpc('ChangeGroup.AutoPoll', { Id: id, Rate: rateMs / 1000 }).catch(() => {});
       },
       stop: (id) => rpc('ChangeGroup.AutoPoll', { Id: id, Rate: 0 }).catch(() => {}),
+      /** Hand a group back to the Core. Its ChangeGroup budget is finite. */
+      destroy: (id) => rpc('ChangeGroup.Destroy', { Id: id }).catch(() => {}),
     },
   };
 })();
+
+// ── ChangeGroup budget ───────────────────────────────────────────────────────
+// A Q-SYS Core has a finite number of ChangeGroups, and it answers the one that
+// does not fit with "Change groups exhausted". This page used to ask for five
+// per connection — vu_inputs, vu_buses, vu_outputs, vu_all and ui_state — and
+// ui_state, created last, was the one that lost. Its 890 controls registered
+// browser-side and the Core never agreed to push any of them, so no fader,
+// crosspoint or route change made in Designer or on the MIDImix ever arrived.
+//
+// All four meter groups subscribed controls on the same `Meter` component at
+// the same 40 ms rate, so they are one group here. Two groups, not five.
+const METER_CG      = 'vu';
+const METER_POLL_MS = 40;
+const STATE_CG      = 'ui_state';
+
+const UCI_CHANGE_GROUPS = [METER_CG, STATE_CG];
+
+// Groups this page asked for before the meter groups were merged. A Core that
+// ran an older build may still be holding them — nothing ever destroyed a
+// group — and they count against its budget until handed back.
+const LEGACY_CHANGE_GROUPS = ['vu_inputs', 'vu_buses', 'vu_outputs', 'vu_all'];
+
+/**
+ * Give back every group this page might own, then let the callers re-create
+ * what they need. Runs on each EngineStatus: the relay opens a fresh TCP
+ * socket per connection, so after a reconnect the Core is still holding the
+ * groups from the previous one.
+ */
+function releaseChangeGroups() {
+  UCI_CHANGE_GROUPS.concat(LEGACY_CHANGE_GROUPS)
+    .forEach(function(id) { QRC.changeGroup.destroy(id); });
+}
+
+// A page that navigates away without doing this leaves its groups on the Core
+// for the next page load to run out on.
+window.addEventListener('beforeunload', releaseChangeGroups);
+
+// ── Shared meter group ───────────────────────────────────────────────────────
+// Keyed so the strip groups can re-register idempotently — loadInitialState,
+// loadBusState and loadOutputState all run again on every reconnect.
+const meterHandlers = new Map();   // key → fn(changes)
+
+function onMeterChanges(key, fn) { meterHandlers.set(key, fn); }
+
+/**
+ * Add meter controls to the single meter group and (re)start its poll. Safe to
+ * call repeatedly: re-sending AutoPoll for the same group and rate is a no-op
+ * on the Core, and on a reconnect it is exactly what is needed.
+ */
+function subscribeMeters(controlNames) {
+  // Create before adding, as the four separate meter groups each did. Re-adding
+  // an existing group is a no-op on the Core, and after a reconnect the group
+  // genuinely is gone.
+  QRC.changeGroup.create(METER_CG);
+  QRC.changeGroup.addComponentControls(METER_CG, 'Meter', controlNames);
+  QRC.changeGroup.poll(METER_CG, METER_POLL_MS, function(changes) {
+    meterHandlers.forEach(function(fn) {
+      try { fn(changes); }
+      catch (e) { console.error('[VU] meter handler failed:', e); }
+    });
+  });
+}
 </script>
 <style>
   /* ── Faire design tokens ──────────────────────────────────────── */
@@ -2031,35 +2095,27 @@ function loadInitialState() {
     .then(r => console.log('[DIAG] Component.GetControls Meter →', JSON.stringify(r).slice(0, 300)))
     .catch(e => console.warn('[DIAG] Component.GetControls Meter FAILED (wrong name?):', e.message));
 
-  // Subscribe to VU meter changes
-  QRC.changeGroup.create('vu_inputs');
-  // Mics: meter channels 1–8
-  BANKS.mics.forEach((ch, i) => {
-    QRC.changeGroup.addComponentControl('vu_inputs', 'Meter', `meter.${ch.meterCh[0]}`);
-  });
-  // Stereo: meter channels 9–16 (use L channel)
-  BANKS.stereo.forEach(ch => {
-    QRC.changeGroup.addComponentControl('vu_inputs', 'Meter', `meter.${ch.meterCh[0]}`);
-  });
-
-  QRC.changeGroup.poll('vu_inputs', 40, function(changes) {
+  // Subscribe to VU meter changes — input strips, mics 1–8 then stereo 9–16
+  // (L channel), plus every meter the drawer shows. One shared meter group.
+  onMeterChanges('inputs', function(changes) {
+    const allCh = [...BANKS.mics, ...BANKS.stereo];
     changes.forEach(c => {
       const meterIdx = parseInt(c.Name.split('.')[1]);
       // Find which channel this meter belongs to
-      const allCh = [...BANKS.mics, ...BANKS.stereo];
       const ch = allCh.find(ch => ch.meterCh[0] === meterIdx);
       if (ch) updateVU(ch.id, c.Value);
     });
   });
 
-  // Register vu_all ChangeGroup for drawer meters
-  QRC.changeGroup.create('vu_all');
+  const inputMeters = [...BANKS.mics, ...BANKS.stereo].map(ch => `meter.${ch.meterCh[0]}`);
+  const drawerMeters = [];
   DRAWER_CHANNELS.forEach(function(ch) {
-    ch.meterCh.forEach(function(idx) {
-      QRC.changeGroup.addComponentControl('vu_all', 'Meter', 'meter.' + idx);
-    });
+    ch.meterCh.forEach(function(idx) { drawerMeters.push('meter.' + idx); });
   });
-  // Restart poll if drawer was opened before connection was ready (or on reconnect)
+  subscribeMeters([...new Set(inputMeters.concat(drawerMeters))]);
+
+  // The drawer handler gates on this rather than on starting and stopping its
+  // own group, which is no longer separable from the strips' meters.
   vuAllPolling = false;
   if (drawerState !== 'collapsed') resumeVuAll();
 }
@@ -2077,6 +2133,10 @@ QRC.connect('ws://' + window.location.host + '/qrc');
 QRC.on('EngineStatus', function(status) {
   if (status.State === 'Active') {
     setConnStatus('ok', status.DesignName || 'Connected');
+    // Hand back the groups the Core still holds for us before asking again —
+    // on a reconnect these are the previous socket's, and nothing else frees
+    // them. Without this the Core runs out and rejects the state subscription.
+    releaseChangeGroups();
     loadInitialState();
     loadBusState();
     loadOutputState();
@@ -2358,15 +2418,14 @@ function loadBusState() {
     });
   });
 
-  QRC.changeGroup.create('vu_buses');
-  BUS_STRIPS.forEach(bus => QRC.changeGroup.addComponentControl('vu_buses', 'Meter', `meter.${bus.meterCh}`));
-  QRC.changeGroup.poll('vu_buses', 40, function(changes) {
+  onMeterChanges('buses', function(changes) {
     changes.forEach(c => {
       const ch = parseInt(c.Name.split('.')[1]);
       const bus = BUS_STRIPS.find(b => b.meterCh === ch);
       if (bus) updateBusVU(bus.id, c.Value);
     });
   });
+  subscribeMeters(BUS_STRIPS.map(bus => `meter.${bus.meterCh}`));
 }
 
 buildBusStrips();
@@ -2580,15 +2639,14 @@ function loadOutputState() {
     });
   });
 
-  QRC.changeGroup.create('vu_outputs');
-  OUTPUT_STRIPS.forEach(s => QRC.changeGroup.addComponentControl('vu_outputs', 'Meter', `meter.${s.meterCh}`));
-  QRC.changeGroup.poll('vu_outputs', 40, function(changes) {
+  onMeterChanges('outputs', function(changes) {
     changes.forEach(c => {
       const ch = parseInt(c.Name.split('.')[1]);
       const s = OUTPUT_STRIPS.find(x => x.meterCh === ch);
       if (s) updateOutputVU(s.id, c.Value);
     });
   });
+  subscribeMeters(OUTPUT_STRIPS.map(s => `meter.${s.meterCh}`));
 }
 
 buildOutputStrips();
@@ -3397,26 +3455,28 @@ function updateDrawerMuteDots() {
   });
 }
 
+// The drawer's meters share the one meter group with the strips, so opening and
+// closing it gates this handler instead of starting and stopping a group of its
+// own. Its meters were a superset of the strips' anyway, so nothing is saved by
+// unsubscribing — and a group handed back here would take the strips with it.
 let vuAllPolling = false;
+
+onMeterChanges('drawer', function(changes) {
+  if (!vuAllPolling) return;
+  changes.forEach(function(c) {
+    const idx = parseInt(c.Name.split('.')[1]);
+    updateDrawerVu(idx, c.Value);
+  });
+  updateDrawerMuteDots();
+});
 
 function resumeVuAll() {
   if (vuAllPolling) return;
   vuAllPolling = true;
-  console.log('[VU] resumeVuAll: starting poll');
-  QRC.changeGroup.poll('vu_all', 40, function(changes) {
-    console.log('[VU] vu_all poll cb, changes:', changes.length, changes[0]);
-    changes.forEach(function(c) {
-      const idx = parseInt(c.Name.split('.')[1]);
-      updateDrawerVu(idx, c.Value);
-    });
-    updateDrawerMuteDots();
-  });
 }
 
 function pauseVuAll() {
-  if (!vuAllPolling) return;
   vuAllPolling = false;
-  QRC.changeGroup.stop('vu_all');
 }
 
 buildDrawerContent();
@@ -3840,7 +3900,7 @@ document.getElementById('proc-comp-bypass').addEventListener('click', function()
 // This block puts all of that state into one ChangeGroup alongside the existing
 // meter groups, so the Core pushes deltas for it the same way it pushes VU.
 
-const STATE_CG        = 'ui_state';
+// STATE_CG is declared with the other ChangeGroup ids, next to the QRC client.
 const STATE_POLL_MS   = 250;   // state, unlike VU, does not need 40 ms
 
 // Component name → Map(control name → [handler, …]).
