@@ -118,6 +118,10 @@ function loadUci(): Any {
     requestAnimationFrame: () => 0,
     navigator: { userAgent: 'test' },
     location: { host: 'localhost:3001' },
+    // The page registers a beforeunload listener to hand its ChangeGroups back
+    // to the Core; see uci-change-groups.test.ts.
+    addEventListener: () => {},
+    removeEventListener: () => {},
   }
   sandbox.window = sandbox
   sandbox.globalThis = sandbox
