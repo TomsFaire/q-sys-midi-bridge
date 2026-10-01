@@ -79,6 +79,30 @@ test('each MIDImix strip column drives one Q-SYS channel', () => {
   }
 })
 
+// MIDI channel per MIDImix control row, from the mappings themselves.
+const ROWS: [string, number][] = [['fader', 7], ['mute', 1], ['Knob B', 5]]
+const COLUMNS = [22, 23, 24, 25, 26, 27, 28, 29]
+
+test('every MIDImix strip column has a fader, a mute and an HPF knob', () => {
+  // The column-consistency test above is satisfied by a column with a single
+  // entry, so a missing row hides from it. A knob with no mapping is a knob
+  // that does nothing on a fresh install.
+  const present = new Set<string>()
+  for (const m of seedMappings()) {
+    if (m.midi.type !== 'cc' || !m.qsys.component) continue
+    if (m.qsys.component.startsWith('Analog.Inputs')) continue
+    present.add(`${m.midi.number}/${m.midi.channel}`)
+  }
+
+  const missing: string[] = []
+  for (const cc of COLUMNS) {
+    for (const [row, ch] of ROWS) {
+      if (!present.has(`${cc}/${ch}`)) missing.push(`column CC ${cc} has no ${row}`)
+    }
+  }
+  assert.deepEqual(missing, [], missing.join('; '))
+})
+
 test('the analog trim knobs reach the full gain the Core allows', () => {
   const knobs = labelled('Knob A')
   assert.ok(knobs.length > 0, 'no Knob A mappings in the seed config')

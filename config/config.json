@@ -348,6 +348,51 @@
       }
     },
     {
+      "label": "Knob B 6",
+      "midi": {
+        "type": "cc",
+        "channel": 5,
+        "number": 27
+      },
+      "qsys": {
+        "type": "component_control",
+        "component": "Sptfy.HPF",
+        "control": "frequency",
+        "min": 10,
+        "max": 300
+      }
+    },
+    {
+      "label": "Knob B 7",
+      "midi": {
+        "type": "cc",
+        "channel": 5,
+        "number": 28
+      },
+      "qsys": {
+        "type": "component_control",
+        "component": "ZoomRX.HPF",
+        "control": "frequency",
+        "min": 10,
+        "max": 300
+      }
+    },
+    {
+      "label": "Knob B 8",
+      "midi": {
+        "type": "cc",
+        "channel": 5,
+        "number": 29
+      },
+      "qsys": {
+        "type": "component_control",
+        "component": "Slides.HPF",
+        "control": "frequency",
+        "min": 10,
+        "max": 300
+      }
+    },
+    {
       "label": "Mic 1 Mute",
       "midi": {
         "type": "cc",
