@@ -164,7 +164,7 @@
         "component": "Analog.Inputs",
         "control": "channel.1.input.gain",
         "min": -100,
-        "max": 10
+        "max": 20
       }
     },
     {
@@ -179,7 +179,7 @@
         "component": "Analog.Inputs",
         "control": "channel.2.input.gain",
         "min": -100,
-        "max": 10
+        "max": 20
       }
     },
     {
@@ -194,7 +194,7 @@
         "component": "Analog.Inputs",
         "control": "channel.3.input.gain",
         "min": -100,
-        "max": 10
+        "max": 20
       }
     },
     {
@@ -209,7 +209,7 @@
         "component": "Analog.Inputs",
         "control": "channel.4.input.gain",
         "min": -100,
-        "max": 10
+        "max": 20
       }
     },
     {
@@ -224,7 +224,7 @@
         "component": "Analog.Inputs",
         "control": "channel.5.input.gain",
         "min": -100,
-        "max": 10
+        "max": 20
       }
     },
     {
@@ -239,7 +239,7 @@
         "component": "Analog.Inputs",
         "control": "channel.6.input.gain",
         "min": -100,
-        "max": 10
+        "max": 20
       }
     },
     {
@@ -254,7 +254,7 @@
         "component": "Analog.Inputs",
         "control": "channel.7.input.gain",
         "min": -100,
-        "max": 10
+        "max": 20
       }
     },
     {
@@ -269,7 +269,7 @@
         "component": "Analog.Inputs",
         "control": "channel.8.input.gain",
         "min": -100,
-        "max": 10
+        "max": 20
       }
     },
     {
@@ -283,8 +283,8 @@
         "type": "component_control",
         "component": "Mic.01.HPF",
         "control": "frequency",
-        "min": -100,
-        "max": 10
+        "min": 10,
+        "max": 300
       }
     },
     {
@@ -298,8 +298,8 @@
         "type": "component_control",
         "component": "Mic.02.HPF",
         "control": "frequency",
-        "min": -100,
-        "max": 10
+        "min": 10,
+        "max": 300
       }
     },
     {
@@ -313,8 +313,8 @@
         "type": "component_control",
         "component": "Mic.03.HPF",
         "control": "frequency",
-        "min": -100,
-        "max": 10
+        "min": 10,
+        "max": 300
       }
     },
     {
@@ -328,8 +328,8 @@
         "type": "component_control",
         "component": "Mic.04.HPF",
         "control": "frequency",
-        "min": -100,
-        "max": 10
+        "min": 10,
+        "max": 300
       }
     },
     {
@@ -341,10 +341,10 @@
       },
       "qsys": {
         "type": "component_control",
-        "component": "Mic.05.HPF",
+        "component": "Styb.HPF",
         "control": "frequency",
-        "min": -100,
-        "max": 10
+        "min": 10,
+        "max": 300
       }
     },
     {
