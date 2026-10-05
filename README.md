@@ -211,6 +211,59 @@ Triggered by Note On. Loads by name or by bank/slot.
 "qsys": { "type": "snapshot", "bank": 1, "slot": 3 }
 ```
 
+### `link` — gang a stereo pair to one physical control
+
+One knob normally drives one Q-Sys control. That's right for a mono mic, but it's only ever half of a stereo source — trim the left leg of a Dante pair and the right stays where it was.
+
+Add `link` to gang a second target to the same knob, fader, or mute. Both legs receive the identical value, computed once, so they can't drift apart.
+
+Either field may be left out, and is then inherited from the primary. That covers both ways a stereo pair gets laid out in Designer:
+
+```jsonc
+// Two components, same control name — the common Dante case:
+"qsys": {
+  "type": "component_control",
+  "component": "Dante.In.9.Gain",
+  "control": "gain",
+  "min": -100,
+  "max": 20,
+  "link": { "component": "Dante.In.10.Gain" }   // control: "gain" inherited
+}
+
+// One component, two controls:
+"qsys": {
+  "type": "component_control",
+  "component": "Dante.Pair.Gain",
+  "control": "gain.1",
+  "min": -100,
+  "max": 20,
+  "link": { "control": "gain.2" }               // component inherited
+}
+```
+
+Give both fields to name an unrelated target explicitly. When the two legs share a component they go out as a single `Component.Set`; separate components are written concurrently, so a knob sweep isn't slowed by the extra leg.
+
+`link` also works on `toggle`, which is what you want for the matching stereo mute:
+
+```jsonc
+"qsys": {
+  "type": "toggle",
+  "component": "Dante.In.9.Gain",
+  "control": "mute",
+  "link": { "component": "Dante.In.10.Gain" }
+}
+```
+
+The linked leg follows the primary's tracked state rather than toggling independently, so a ganged pair can't desync into "left muted, right open".
+
+`link` is only valid on `component_control` and `toggle` — the other two have no component to inherit from, and a `link` on them is rejected rather than silently ignored.
+
+**In the UI:** tick the **Link** checkbox on any assigned row at `/mappings` and a second row appears underneath for the right leg. Min/Max stay on the primary row and apply to both.
+
+The desktop **Configure Mappings** window can't create or remove a gang — do that on the `/mappings` page. It does carry existing gangs through its own saves untouched, so editing something else there won't quietly un-gang your stereo pairs. Pointing a ganged row at a different component clears its link.
+
+**Known limitation:** the mute LED follows the *primary* leg only. If something outside the bridge mutes just the linked leg, the LED won't show it.
+
 ---
 
 ## Adapting to other controllers
@@ -284,6 +337,8 @@ The three knob rows give you 24 CCs. Only Row A is wired by default (pre-fader t
 | Row C | Compression threshold | Compressor component, `threshold`, min -40 max 0 |
 | Solo buttons | Bus mute toggles | Bus Gain block, e.g. `MicRoom.Gain`, `mute` |
 | Solo buttons | Snapshot recall | `type: snapshot` per button |
+
+A knob assigned to a **stereo** source needs both legs, or you'll only be trimming one side of it. Add `link` to the mapping and the one knob drives the pair — see [`link` — gang a stereo pair to one physical control](#link--gang-a-stereo-pair-to-one-physical-control).
 
 The control names for sub-components (HPF, compressor, EQ) depend on how your Q-Sys design is structured. If they're inside a larger component rather than individual blocks, you may not be able to address them via `Component.Set` — in that case, expose them as Named Controls in Designer and use `type: named_control`.
 

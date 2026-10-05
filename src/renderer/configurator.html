@@ -362,7 +362,9 @@ const { ipcRenderer, clipboard } = require('electron')
 let physicalControls = []
 let components = []                   // [{name, type}]
 const ctrlCache = new Map()           // componentName → [{name, isBoolean}]
-// assignments: controlId → {component, controlName, min, max, label}
+// assignments: controlId → {component, controlName, min, max, label, link}
+// `link` is the ganged second leg of a stereo pair. It's set on the browser
+// /mappings page; this window only carries it through saves.
 const assignments = new Map()
 
 let activeGroup = 'all'
@@ -390,6 +392,14 @@ async function init() {
           min:         m.qsys.min        ?? -100,
           max:         m.qsys.max        ?? 10,
           label:       m.label           ?? pc.label,
+          // Held so a save from this window doesn't drop the stereo gang.
+          // An omitted link field is inherited from the primary.
+          link:        m.qsys.link
+            ? {
+                component: m.qsys.link.component ?? m.qsys.component ?? '',
+                control:   m.qsys.link.control   ?? m.qsys.control   ?? '',
+              }
+            : null,
         })
       }
     }
@@ -576,7 +586,10 @@ document.getElementById('tbody').addEventListener('change', async e => {
       return
     }
 
-    assignments.set(id, { ...a, component: componentName, controlName: '', min: -100, max: 10 })
+    // Repointing the primary at a different component makes any existing gang
+    // meaningless, and this window has no UI to clear one — so drop it here
+    // rather than leave a stale leg the user can't get rid of.
+    assignments.set(id, { ...a, component: componentName, controlName: '', min: -100, max: 10, link: null })
 
     // Fetch controls and populate datalist
     const ctrls = await getControlsFor(componentName)
@@ -684,12 +697,30 @@ function buildMappings() {
     mappings.push({
       label: a.label || pc.label,
       midi: { ...pc.midi },
-      qsys: isToggle
+      qsys: withLink(a, isToggle
         ? { type: 'toggle', component: a.component, control: a.controlName }
-        : { type: 'component_control', component: a.component, control: a.controlName, min: a.min ?? -100, max: a.max ?? 10 },
+        : { type: 'component_control', component: a.component, control: a.controlName, min: a.min ?? -100, max: a.max ?? 10 }),
     })
   }
   return mappings
+}
+
+/**
+ * Carries a stereo gang through a Configurator save untouched.
+ *
+ * Gangs are created and removed on the browser /mappings page; this window
+ * only has to avoid dropping them. Saving here rewrites the whole mappings
+ * array, so without this a single fader tweak would quietly turn every
+ * ganged stereo pair back into a mono one. Fields matching the primary are
+ * left out and inherited back on load.
+ */
+function withLink(a, qsys) {
+  if (!a.link) return qsys
+  const link = {}
+  if (a.link.component && a.link.component !== a.component) link.component = a.link.component
+  if (a.link.control && a.link.control !== a.controlName) link.control = a.link.control
+  if (link.component || link.control) qsys.link = link
+  return qsys
 }
 
 async function doSave() {

@@ -8,9 +8,32 @@
 
 import { QrcClient } from './qrc-client.js'
 import { MidiIO } from './midi-io.js'
-import type { Config, Mapping } from './config.js'
+import type { Config, Mapping, QsysRef } from './config.js'
+
+/** One resolved Q-SYS write target. */
+interface Target { component: string; control: string }
 
 const CHANGE_GROUP_ID = 'mutes'
+
+const keyOf = (t: Target): string => `${t.component}:${t.control}`
+
+/**
+ * The primary target, plus the ganged leg when `qsys.link` is set. A link
+ * field left out is inherited from the primary, so `{ component }` alone
+ * means "other component, same control" and `{ control }` alone means
+ * "same component, other control".
+ */
+function resolveTargets(q: QsysRef): Target[] {
+  const primary: Target = { component: q.component ?? '', control: q.control ?? '' }
+  if (!q.link) return [primary]
+  return [
+    primary,
+    {
+      component: q.link.component ?? primary.component,
+      control: q.link.control ?? primary.control,
+    },
+  ]
+}
 
 export class MappingEngine {
   private qrc: QrcClient
@@ -183,33 +206,33 @@ export class MappingEngine {
 
     switch (q.type) {
       case 'component_control': {
+        // Scale once, then write that same value to every leg — a stereo pair
+        // must never drift apart by re-scaling per leg.
         const scaled = this.scale(midiValue, q.min ?? 0, q.max ?? 1)
-        await this.qrc.call('Component.Set', {
-          Name: q.component,
-          Controls: [{ Name: q.control, Value: scaled }],
-        })
-        this.log(`${label} → ${scaled.toFixed(1)}`)
+        const targets = resolveTargets(q)
+        await this.setTargets(targets, scaled)
+        this.log(`${label} → ${scaled.toFixed(1)}${targets.length > 1 ? ' (ganged)' : ''}`)
         break
       }
 
       case 'toggle': {
-        const key = `${q.component}:${q.control}`
-        const current = this.toggleState.get(key) ?? 0
+        const targets = resolveTargets(q)
+        // The linked leg follows the primary's cached state rather than
+        // toggling on its own, so a ganged pair can't desync into
+        // "left muted, right open".
+        const current = this.toggleState.get(keyOf(targets[0])) ?? 0
         const next = current === 0 ? 1 : 0
-        this.toggleState.set(key, next)
-        await this.qrc.call('Component.Set', {
-          Name: q.component,
-          Controls: [{ Name: q.control, Value: next }],
-        })
-        // Update LED immediately — Q-SYS won't push a notification for
+        for (const t of targets) this.toggleState.set(keyOf(t), next)
+        await this.setTargets(targets, next)
+        // Update LEDs immediately — Q-SYS won't push a notification for
         // changes we initiated ourselves on the same connection.
-        console.log(`[Bridge DEBUG] toggle key="${key}" ledMapSize=${this.ledMap.size} led=${JSON.stringify(this.ledMap.get(key))}`)
-        const led = this.ledMap.get(key)
-        if (led) {
+        for (const t of targets) {
+          const led = this.ledMap.get(keyOf(t))
+          if (!led) continue
           if (next === 1) this.midi.sendNoteOn(led.channel, led.note)
           else this.midi.sendNoteOff(led.channel, led.note)
         }
-        this.log(`${label} → ${next === 1 ? 'MUTED' : 'unmuted'}`)
+        this.log(`${label} → ${next === 1 ? 'MUTED' : 'unmuted'}${targets.length > 1 ? ' (ganged)' : ''}`)
         break
       }
 
@@ -233,6 +256,28 @@ export class MappingEngine {
         break
       }
     }
+  }
+
+  /**
+   * Writes `value` to every target, batching those that share a component
+   * into one Component.Set. Separate components go out together rather than
+   * in series, so a knob sweep isn't throttled by the extra leg.
+   */
+  private async setTargets(targets: Target[], value: number): Promise<void> {
+    const byComponent = new Map<string, string[]>()
+    for (const t of targets) {
+      const controls = byComponent.get(t.component) ?? []
+      if (!controls.includes(t.control)) controls.push(t.control)
+      byComponent.set(t.component, controls)
+    }
+    await Promise.all(
+      [...byComponent].map(([Name, controls]) =>
+        this.qrc.call('Component.Set', {
+          Name,
+          Controls: controls.map((name) => ({ Name: name, Value: value })),
+        }),
+      ),
+    )
   }
 
   private scale(value: number, min: number, max: number): number {

@@ -161,6 +161,10 @@ export function validateMappings(
   }
   const errors: MappingValidationError[] = []
   const validTypes = new Set(['component_control', 'toggle', 'named_control', 'snapshot'])
+  // A gang needs a component to inherit, so named_control and snapshot can't
+  // carry one. Rejecting rather than ignoring keeps a typo from silently
+  // moving only one leg of a pair.
+  const linkableTypes = new Set(['component_control', 'toggle'])
   mappings.forEach((entry, index) => {
     const e = entry as Record<string, unknown>
     const midi = e?.midi as Record<string, unknown> | undefined
@@ -172,6 +176,20 @@ export function validateMappings(
     }
     if (!qsys || typeof qsys.type !== 'string' || !validTypes.has(qsys.type as string)) {
       errors.push({ index, reason: `qsys.type must be one of ${[...validTypes].join(', ')}` })
+    }
+    if (qsys?.link !== undefined) {
+      const link = qsys.link
+      if (typeof link !== 'object' || link === null || Array.isArray(link)) {
+        errors.push({ index, reason: 'qsys.link must be an object' })
+      } else {
+        const l = link as Record<string, unknown>
+        const named = (v: unknown) => typeof v === 'string' && v.trim() !== ''
+        if (!named(l.component) && !named(l.control)) {
+          errors.push({ index, reason: 'qsys.link must name a component, a control, or both' })
+        } else if (!linkableTypes.has(qsys.type as string)) {
+          errors.push({ index, reason: 'qsys.link is only valid on component_control and toggle mappings' })
+        }
+      }
     }
   })
   if (errors.length > 0) return { valid: false, errors }
