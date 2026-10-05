@@ -175,13 +175,15 @@ export class MappingEngine {
   }
 
   private handleNotification(result: unknown): void {
-    console.log('[Bridge] handleNotification raw:', JSON.stringify(result).slice(0, 200))
     if (!result || typeof result !== 'object') return
     const r = result as { Changes?: Array<{ Component: string; Name: string; Value: number }> }
     if (!Array.isArray(r.Changes)) {
       console.warn('[Bridge] handleNotification: no Changes array in result')
       return
     }
+    // An empty push is the AutoPoll clock ticking, not news.
+    if (r.Changes.length === 0) return
+    console.log('[Bridge] handleNotification:', JSON.stringify(r.Changes).slice(0, 200))
 
     for (const change of r.Changes) {
       const key = `${change.Component}:${change.Name}`
