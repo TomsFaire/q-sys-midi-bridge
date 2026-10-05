@@ -57,6 +57,13 @@
   select:disabled, input:disabled { background: var(--bg); color: var(--text-dim); }
   .td-label { font-size: 12px; font-weight: 500; padding-left: 10px; white-space: nowrap; }
   .td-clear { text-align: center; }
+  .td-link { text-align: center; }
+  .td-link input[type=checkbox] { width: auto; cursor: pointer; }
+  .leg { display: inline-block; width: 13px; font-size: 10px; font-weight: 700; color: var(--text-dim); }
+  tr.link-row { background: #f0fff4; }
+  tr.link-row td { border-bottom: 1px solid var(--border); }
+  tr.link-row .td-label { padding-left: 22px; font-weight: 400; color: var(--text-dim); }
+  .shared-hint { font-size: 10px; color: var(--text-dim); font-style: italic; }
   .clear-btn { background: none; color: var(--text-dim); font-size: 13px; padding: 2px 5px; border-radius: 3px; }
   .clear-btn:hover { background: #ffe5e5; color: var(--red); }
 
@@ -105,7 +112,7 @@
     <table>
       <thead>
         <tr>
-          <th>Control</th><th>Type</th><th>Q-Sys Component</th><th>Control Name</th><th>Min</th><th>Max</th><th></th>
+          <th>Control</th><th>Type</th><th>Q-Sys Component</th><th>Control Name</th><th>Min</th><th>Max</th><th title="Gang a second Q-Sys target to this control — the right leg of a stereo pair">Link</th><th></th>
         </tr>
       </thead>
       <tbody id="tbody"></tbody>
@@ -188,6 +195,14 @@ async function loadApp() {
         min: mObj.qsys.min ?? -100,
         max: mObj.qsys.max ?? 10,
         label: mObj.label ?? pc.label,
+        // A link field left out on disk is inherited from the primary, so
+        // show the inherited value rather than a blank box.
+        link: mObj.qsys.link
+          ? {
+              component: mObj.qsys.link.component ?? mObj.qsys.component ?? '',
+              control: mObj.qsys.link.control ?? mObj.qsys.control ?? '',
+            }
+          : null,
       })
     }
   }
@@ -234,7 +249,7 @@ function renderTable() {
     if (pc.group !== lastGroup) {
       const gr = tbody.insertRow()
       gr.className = 'group-row'
-      gr.insertCell().colSpan = 7
+      gr.insertCell().colSpan = 8
       gr.cells[0].textContent = pc.group
       lastGroup = pc.group
     }
@@ -247,7 +262,8 @@ function renderTable() {
 
     const tdLabel = row.insertCell()
     tdLabel.className = 'td-label'
-    tdLabel.textContent = pc.label
+    // Only call it the "L" leg once there's an "R" leg to tell it apart from.
+    tdLabel.innerHTML = (a?.link ? '<span class="leg">L</span>' : '') + esc(pc.label)
 
     const tdType = row.insertCell()
     tdType.innerHTML = '<span class="badge badge-' + pc.controlType + '">' + pc.controlType + '</span>'
@@ -293,6 +309,17 @@ function renderTable() {
     if (isToggle) maxInp.style.visibility = 'hidden'
     tdMax.appendChild(maxInp)
 
+    const tdLink = row.insertCell()
+    tdLink.className = 'td-link'
+    const linkChk = document.createElement('input')
+    linkChk.type = 'checkbox'
+    linkChk.dataset.id = pc.id
+    linkChk.className = 'lnk-chk'
+    linkChk.checked = !!a?.link
+    linkChk.disabled = !a?.component
+    linkChk.title = 'Gang a second Q-Sys target to this control'
+    tdLink.appendChild(linkChk)
+
     const tdClear = row.insertCell()
     tdClear.className = 'td-clear'
     const clearBtn = document.createElement('button')
@@ -308,10 +335,73 @@ function renderTable() {
       getControlsFor(a.component).then(ctrls => populateDatalist(dl, ctrls))
     }
 
+    if (a?.link) renderLinkRow(tbody, pc, a)
+
     shown++
   }
 
   document.getElementById('count-label').textContent = shown + ' of ' + physicalControls.length + ' controls'
+}
+
+/**
+ * The ganged second leg, rendered as its own row under the primary. Min/Max
+ * stay on the primary — both legs take the same scaled value, which is the
+ * whole point of ganging them.
+ */
+function renderLinkRow(tbody, pc, a) {
+  const row = tbody.insertRow()
+  row.className = 'link-row'
+  row.dataset.id = pc.id
+
+  const tdLabel = row.insertCell()
+  tdLabel.className = 'td-label'
+  tdLabel.innerHTML = '<span class="leg">R</span>linked leg'
+
+  row.insertCell()
+
+  const tdComp = row.insertCell()
+  const compSel = document.createElement('select')
+  compSel.dataset.id = pc.id
+  compSel.className = 'lnk-comp-sel'
+  compSel.innerHTML = '<option value="">— pick a component —</option>' +
+    components.map(c => '<option value="' + esc(c.name) + '"' + (a.link.component === c.name ? ' selected' : '') + '>' + esc(c.name) + '</option>').join('')
+  tdComp.appendChild(compSel)
+
+  const tdCtrl = row.insertCell()
+  const dlId = 'dl-lnk-' + pc.id
+  const ctrlInput = document.createElement('input')
+  ctrlInput.type = 'text'
+  ctrlInput.dataset.id = pc.id
+  ctrlInput.className = 'lnk-ctrl-input'
+  ctrlInput.placeholder = 'type or pick…'
+  ctrlInput.value = a.link.control ?? ''
+  ctrlInput.setAttribute('list', dlId)
+  const dl = document.createElement('datalist')
+  dl.id = dlId
+  tdCtrl.appendChild(ctrlInput)
+  tdCtrl.appendChild(dl)
+
+  const tdShared = row.insertCell()
+  tdShared.colSpan = 2
+  tdShared.innerHTML = '<span class="shared-hint">min/max shared</span>'
+
+  row.insertCell()
+  row.insertCell()
+
+  const linkComp = a.link.component || a.component
+  if (ctrlCache.has(linkComp)) populateDatalist(dl, ctrlCache.get(linkComp))
+  else getControlsFor(linkComp).then(ctrls => populateDatalist(dl, ctrls))
+}
+
+/**
+ * Points a row's primary target at a different Q-Sys component. Any existing
+ * gang is dropped — the old partner has nothing to do with the new primary,
+ * and silently ganging two unrelated controls is worse than making the user
+ * tick Link again.
+ */
+function repointPrimary(id, componentName) {
+  const a = assignments.get(id) ?? {}
+  assignments.set(id, { ...a, component: componentName, controlName: '', min: -100, max: 10, link: null })
 }
 
 function populateDatalist(dl, controls) {
@@ -324,10 +414,22 @@ document.getElementById('tbody').addEventListener('change', async e => {
   if (!id) return
   if (el.classList.contains('comp-sel')) {
     const componentName = el.value
-    const a = assignments.get(id) ?? {}
     if (!componentName) { assignments.delete(id); renderTable(); return }
-    assignments.set(id, { ...a, component: componentName, controlName: '', min: -100, max: 10 })
+    repointPrimary(id, componentName)
     await getControlsFor(componentName)
+    renderTable()
+  } else if (el.classList.contains('lnk-chk')) {
+    const a = assignments.get(id)
+    if (!a) return
+    // Seed the new leg from the primary so the common case — same control
+    // name on the neighbouring component — only needs the component picked.
+    assignments.set(id, { ...a, link: el.checked ? { component: '', control: a.controlName } : null })
+    renderTable()
+  } else if (el.classList.contains('lnk-comp-sel')) {
+    const a = assignments.get(id)
+    if (!a?.link) return
+    assignments.set(id, { ...a, link: { ...a.link, component: el.value } })
+    if (el.value) await getControlsFor(el.value)
     renderTable()
   }
 })
@@ -337,7 +439,10 @@ document.getElementById('tbody').addEventListener('input', e => {
   const id = el.dataset.id
   if (!id) return
   const a = assignments.get(id) ?? {}
-  if (el.classList.contains('ctrl-input')) {
+  if (el.classList.contains('lnk-ctrl-input')) {
+    if (!a.link) return
+    assignments.set(id, { ...a, link: { ...a.link, control: el.value.trim() } })
+  } else if (el.classList.contains('ctrl-input')) {
     assignments.set(id, { ...a, controlName: el.value.trim() })
   } else if (el.classList.contains('min-inp')) {
     assignments.set(id, { ...a, min: parseFloat(el.value) || 0 })
@@ -378,13 +483,22 @@ function buildMappings() {
     const a = assignments.get(pc.id)
     if (!a?.component || !a?.controlName) continue
     const isToggle = pc.controlType === 'toggle'
-    mappings.push({
-      label: a.label || pc.label,
-      midi: { ...pc.midi },
-      qsys: isToggle
-        ? { type: 'toggle', component: a.component, control: a.controlName }
-        : { type: 'component_control', component: a.component, control: a.controlName, min: a.min ?? -100, max: a.max ?? 10 },
-    })
+    const qsys = isToggle
+      ? { type: 'toggle', component: a.component, control: a.controlName }
+      : { type: 'component_control', component: a.component, control: a.controlName, min: a.min ?? -100, max: a.max ?? 10 }
+
+    // Only emit a link once it actually names a second target. A ticked but
+    // unfilled row would otherwise fail server validation and lose the whole
+    // save, not just that row. Fields matching the primary are left out and
+    // inherited back on load.
+    if (a.link) {
+      const link = {}
+      if (a.link.component && a.link.component !== a.component) link.component = a.link.component
+      if (a.link.control && a.link.control !== a.controlName) link.control = a.link.control
+      if (link.component || link.control) qsys.link = link
+    }
+
+    mappings.push({ label: a.label || pc.label, midi: { ...pc.midi }, qsys })
   }
   return mappings
 }
