@@ -33,6 +33,8 @@
   .login-card p.hint { font-size: 12px; color: var(--text-dim); }
   .login-card p.err { font-size: 12px; color: var(--red); min-height: 14px; }
 
+  #editor-root { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+
   footer { display: flex; align-items: center; gap: 10px; padding: 10px 16px; background: var(--surface); border-top: 1px solid var(--border); }
   #save-status { font-size: 12px; color: var(--text-dim); }
   #save-status.ok  { color: var(--green); }
@@ -58,32 +60,8 @@
     <button class="btn btn-ghost" id="refresh-btn">↺ Refresh Q-Sys</button>
   </header>
 
-  <div class="tabs" id="tabs">
-    <button class="tab active" data-group="all">All</button>
-    <button class="tab" data-group="Faders">Faders</button>
-    <button class="tab" data-group="Knobs A">Knobs A</button>
-    <button class="tab" data-group="Knobs B">Knobs B</button>
-    <button class="tab" data-group="Knobs C">Knobs C</button>
-    <button class="tab" data-group="Mutes">Mutes</button>
-    <button class="tab" data-group="Rec Arms">Rec Arms</button>
-    <button class="tab" data-group="Buttons">Buttons</button>
-  </div>
-
-  <div class="filterbar">
-    <input type="search" id="filter-input" placeholder="Filter e.g. Fader 1, Mute…">
-    <span id="count-label"></span>
-  </div>
-
-  <div class="table-wrap">
-    <table>
-      <thead>
-        <tr>
-          <th>Control</th><th>Type</th><th>Q-Sys Component</th><th>Control Name</th><th>Min</th><th>Max</th><th title="Gang a second Q-Sys target to this control — the right leg of a stereo pair">Link</th><th></th>
-        </tr>
-      </thead>
-      <tbody id="tbody"></tbody>
-    </table>
-  </div>
+  <!-- mount() builds the tab/filter toolbar and the table inside this element. -->
+  <div id="editor-root"></div>
 
   <footer>
     <button class="btn btn-primary" id="save-btn">Save</button>
@@ -93,13 +71,9 @@
   </footer>
 </div>
 
+<script src="/shared/mapping-editor.js"></script>
 <script>
-let physicalControls = []
-let components = []
-const ctrlCache = new Map()
-const assignments = new Map()
-let activeGroup = 'all'
-let filterText = ''
+let editor = null
 
 function esc(str) {
   return String(str).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
@@ -147,351 +121,35 @@ document.getElementById('login-btn').addEventListener('click', async () => {
   }
 })
 
+// The shared editor owns all table state. The page supplies only transport.
+const adapter = {
+  loadEditorState: () => api('/api/mappings'),
+  getQsysStatus: async () => {
+    try { await api('/api/qsys/components'); return { connected: true } }
+    catch (e) { return { connected: false, message: e.message } }
+  },
+  discoverComponents: async () => (await api('/api/qsys/components')).components,
+  getComponentControls: async (name) =>
+    (await api('/api/qsys/components/' + encodeURIComponent(name) + '/controls')).controls,
+  save: (m) => api('/api/mappings', { method: 'POST', body: JSON.stringify(m) }),
+  saveAndApply: (m) => api('/api/mappings/apply', { method: 'POST', body: JSON.stringify(m) }),
+}
+
 async function loadApp() {
-  const data = await api('/api/mappings')
-  physicalControls = data.physicalControls
-  assignments.clear()
-  for (const mObj of data.mappings) {
-    const pc = physicalControls.find(p =>
-      p.midi.type === mObj.midi.type && p.midi.channel === mObj.midi.channel && p.midi.number === mObj.midi.number)
-    if (pc) {
-      assignments.set(pc.id, {
-        component: mObj.qsys.component ?? '',
-        controlName: mObj.qsys.control ?? '',
-        min: mObj.qsys.min ?? -100,
-        max: mObj.qsys.max ?? 10,
-        label: mObj.label ?? pc.label,
-        // A link field left out on disk is inherited from the primary, so
-        // show the inherited value rather than a blank box.
-        link: mObj.qsys.link
-          ? {
-              component: mObj.qsys.link.component ?? mObj.qsys.component ?? '',
-              control: mObj.qsys.link.control ?? mObj.qsys.control ?? '',
-            }
-          : null,
-      })
-    }
-  }
-  await refreshComponents()
-  renderTable()
+  editor = await MappingEditor.mount({
+    root: document.getElementById('editor-root'),
+    adapter,
+    onStatus: ({ kind, text }) => {
+      const el = document.getElementById('save-status')
+      el.className = kind === 'ok' ? 'ok' : kind === 'err' ? 'err' : ''
+      el.textContent = text
+    },
+  })
 }
 
-async function refreshComponents() {
-  try {
-    const data = await api('/api/qsys/components')
-    components = data.components
-    ctrlCache.clear()
-  } catch (e) {
-    components = []
-    const status = document.getElementById('save-status')
-    status.textContent = 'Q-Sys: ' + e.message
-    status.className = 'err'
-  }
-}
-
-async function getControlsFor(componentName) {
-  if (ctrlCache.has(componentName)) return ctrlCache.get(componentName)
-  let controls = []
-  try {
-    const data = await api('/api/qsys/components/' + encodeURIComponent(componentName) + '/controls')
-    controls = data.controls
-    controls.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }))
-  } catch { /* manual entry fallback */ }
-  ctrlCache.set(componentName, controls)
-  return controls
-}
-
-function renderTable() {
-  const tbody = document.getElementById('tbody')
-  tbody.innerHTML = ''
-  const lf = filterText.toLowerCase()
-  let shown = 0
-  let lastGroup = null
-
-  for (const pc of physicalControls) {
-    if (activeGroup !== 'all' && pc.group !== activeGroup) continue
-    if (lf && !pc.label.toLowerCase().includes(lf) && !pc.id.toLowerCase().includes(lf)) continue
-
-    if (pc.group !== lastGroup) {
-      const gr = tbody.insertRow()
-      gr.className = 'group-row'
-      gr.insertCell().colSpan = 8
-      gr.cells[0].textContent = pc.group
-      lastGroup = pc.group
-    }
-
-    const a = assignments.get(pc.id)
-    const isToggle = pc.controlType === 'toggle'
-    const row = tbody.insertRow()
-    row.className = 'ctrl-row' + (a?.component ? ' assigned' : '')
-    row.dataset.id = pc.id
-
-    const tdLabel = row.insertCell()
-    tdLabel.className = 'td-label'
-    // Only call it the "L" leg once there's an "R" leg to tell it apart from.
-    tdLabel.innerHTML = (a?.link ? '<span class="leg">L</span>' : '') + esc(pc.label)
-
-    const tdType = row.insertCell()
-    tdType.innerHTML = '<span class="badge badge-' + pc.controlType + '">' + pc.controlType + '</span>'
-
-    const tdComp = row.insertCell()
-    const compSel = document.createElement('select')
-    compSel.dataset.id = pc.id
-    compSel.className = 'comp-sel'
-    compSel.innerHTML = '<option value="">— unassigned —</option>' +
-      components.map(c => '<option value="' + esc(c.name) + '"' + (a?.component === c.name ? ' selected' : '') + '>' + esc(c.name) + '</option>').join('')
-    tdComp.appendChild(compSel)
-
-    const tdCtrl = row.insertCell()
-    const dlId = 'dl-' + pc.id
-    const ctrlInput = document.createElement('input')
-    ctrlInput.type = 'text'
-    ctrlInput.dataset.id = pc.id
-    ctrlInput.className = 'ctrl-input'
-    ctrlInput.placeholder = a?.component ? 'type or pick…' : '—'
-    ctrlInput.value = a?.controlName ?? ''
-    ctrlInput.disabled = !a?.component
-    ctrlInput.setAttribute('list', dlId)
-    const dl = document.createElement('datalist')
-    dl.id = dlId
-    tdCtrl.appendChild(ctrlInput)
-    tdCtrl.appendChild(dl)
-
-    const tdMin = row.insertCell()
-    const minInp = document.createElement('input')
-    minInp.type = 'number'; minInp.step = 'any'
-    minInp.dataset.id = pc.id; minInp.className = 'min-inp'
-    minInp.value = String(a?.min ?? -100)
-    minInp.disabled = isToggle || !a?.component
-    if (isToggle) minInp.style.visibility = 'hidden'
-    tdMin.appendChild(minInp)
-
-    const tdMax = row.insertCell()
-    const maxInp = document.createElement('input')
-    maxInp.type = 'number'; maxInp.step = 'any'
-    maxInp.dataset.id = pc.id; maxInp.className = 'max-inp'
-    maxInp.value = String(a?.max ?? 10)
-    maxInp.disabled = isToggle || !a?.component
-    if (isToggle) maxInp.style.visibility = 'hidden'
-    tdMax.appendChild(maxInp)
-
-    const tdLink = row.insertCell()
-    tdLink.className = 'td-link'
-    const linkChk = document.createElement('input')
-    linkChk.type = 'checkbox'
-    linkChk.dataset.id = pc.id
-    linkChk.className = 'lnk-chk'
-    linkChk.checked = !!a?.link
-    linkChk.disabled = !a?.component
-    linkChk.title = 'Gang a second Q-Sys target to this control'
-    tdLink.appendChild(linkChk)
-
-    const tdClear = row.insertCell()
-    tdClear.className = 'td-clear'
-    const clearBtn = document.createElement('button')
-    clearBtn.className = 'clear-btn'
-    clearBtn.dataset.id = pc.id
-    clearBtn.textContent = '✕'
-    clearBtn.disabled = !a?.component
-    tdClear.appendChild(clearBtn)
-
-    if (a?.component && ctrlCache.has(a.component)) {
-      populateDatalist(dl, ctrlCache.get(a.component))
-    } else if (a?.component) {
-      getControlsFor(a.component).then(ctrls => populateDatalist(dl, ctrls))
-    }
-
-    if (a?.link) renderLinkRow(tbody, pc, a)
-
-    shown++
-  }
-
-  document.getElementById('count-label').textContent = shown + ' of ' + physicalControls.length + ' controls'
-}
-
-/**
- * The ganged second leg, rendered as its own row under the primary. Min/Max
- * stay on the primary — both legs take the same scaled value, which is the
- * whole point of ganging them.
- */
-function renderLinkRow(tbody, pc, a) {
-  const row = tbody.insertRow()
-  row.className = 'link-row'
-  row.dataset.id = pc.id
-
-  const tdLabel = row.insertCell()
-  tdLabel.className = 'td-label'
-  tdLabel.innerHTML = '<span class="leg">R</span>linked leg'
-
-  row.insertCell()
-
-  const tdComp = row.insertCell()
-  const compSel = document.createElement('select')
-  compSel.dataset.id = pc.id
-  compSel.className = 'lnk-comp-sel'
-  compSel.innerHTML = '<option value="">— pick a component —</option>' +
-    components.map(c => '<option value="' + esc(c.name) + '"' + (a.link.component === c.name ? ' selected' : '') + '>' + esc(c.name) + '</option>').join('')
-  tdComp.appendChild(compSel)
-
-  const tdCtrl = row.insertCell()
-  const dlId = 'dl-lnk-' + pc.id
-  const ctrlInput = document.createElement('input')
-  ctrlInput.type = 'text'
-  ctrlInput.dataset.id = pc.id
-  ctrlInput.className = 'lnk-ctrl-input'
-  ctrlInput.placeholder = 'type or pick…'
-  ctrlInput.value = a.link.control ?? ''
-  ctrlInput.setAttribute('list', dlId)
-  const dl = document.createElement('datalist')
-  dl.id = dlId
-  tdCtrl.appendChild(ctrlInput)
-  tdCtrl.appendChild(dl)
-
-  const tdShared = row.insertCell()
-  tdShared.colSpan = 2
-  tdShared.innerHTML = '<span class="shared-hint">min/max shared</span>'
-
-  row.insertCell()
-  row.insertCell()
-
-  const linkComp = a.link.component || a.component
-  if (ctrlCache.has(linkComp)) populateDatalist(dl, ctrlCache.get(linkComp))
-  else getControlsFor(linkComp).then(ctrls => populateDatalist(dl, ctrls))
-}
-
-/**
- * Points a row's primary target at a different Q-Sys component. Any existing
- * gang is dropped — the old partner has nothing to do with the new primary,
- * and silently ganging two unrelated controls is worse than making the user
- * tick Link again.
- */
-function repointPrimary(id, componentName) {
-  const a = assignments.get(id) ?? {}
-  assignments.set(id, { ...a, component: componentName, controlName: '', min: -100, max: 10, link: null })
-}
-
-function populateDatalist(dl, controls) {
-  dl.innerHTML = controls.map(c => '<option value="' + esc(c.name) + '">').join('')
-}
-
-document.getElementById('tbody').addEventListener('change', async e => {
-  const el = e.target
-  const id = el.dataset.id
-  if (!id) return
-  if (el.classList.contains('comp-sel')) {
-    const componentName = el.value
-    if (!componentName) { assignments.delete(id); renderTable(); return }
-    repointPrimary(id, componentName)
-    await getControlsFor(componentName)
-    renderTable()
-  } else if (el.classList.contains('lnk-chk')) {
-    const a = assignments.get(id)
-    if (!a) return
-    // Seed the new leg from the primary so the common case — same control
-    // name on the neighbouring component — only needs the component picked.
-    assignments.set(id, { ...a, link: el.checked ? { component: '', control: a.controlName } : null })
-    renderTable()
-  } else if (el.classList.contains('lnk-comp-sel')) {
-    const a = assignments.get(id)
-    if (!a?.link) return
-    assignments.set(id, { ...a, link: { ...a.link, component: el.value } })
-    if (el.value) await getControlsFor(el.value)
-    renderTable()
-  }
-})
-
-document.getElementById('tbody').addEventListener('input', e => {
-  const el = e.target
-  const id = el.dataset.id
-  if (!id) return
-  const a = assignments.get(id) ?? {}
-  if (el.classList.contains('lnk-ctrl-input')) {
-    if (!a.link) return
-    assignments.set(id, { ...a, link: { ...a.link, control: el.value.trim() } })
-  } else if (el.classList.contains('ctrl-input')) {
-    assignments.set(id, { ...a, controlName: el.value.trim() })
-  } else if (el.classList.contains('min-inp')) {
-    assignments.set(id, { ...a, min: parseFloat(el.value) || 0 })
-  } else if (el.classList.contains('max-inp')) {
-    assignments.set(id, { ...a, max: parseFloat(el.value) || 1 })
-  }
-})
-
-document.getElementById('tbody').addEventListener('click', e => {
-  const btn = e.target.closest('.clear-btn')
-  if (!btn) return
-  assignments.delete(btn.dataset.id)
-  renderTable()
-})
-
-document.getElementById('tabs').addEventListener('click', e => {
-  const tab = e.target.closest('.tab')
-  if (!tab) return
-  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'))
-  tab.classList.add('active')
-  activeGroup = tab.dataset.group
-  renderTable()
-})
-
-document.getElementById('filter-input').addEventListener('input', e => {
-  filterText = e.target.value
-  renderTable()
-})
-
-document.getElementById('refresh-btn').addEventListener('click', async () => {
-  await refreshComponents()
-  renderTable()
-})
-
-function buildMappings() {
-  const mappings = []
-  for (const pc of physicalControls) {
-    const a = assignments.get(pc.id)
-    if (!a?.component || !a?.controlName) continue
-    const isToggle = pc.controlType === 'toggle'
-    const qsys = isToggle
-      ? { type: 'toggle', component: a.component, control: a.controlName }
-      : { type: 'component_control', component: a.component, control: a.controlName, min: a.min ?? -100, max: a.max ?? 10 }
-
-    // Only emit a link once it actually names a second target. A ticked but
-    // unfilled row would otherwise fail server validation and lose the whole
-    // save, not just that row. Fields matching the primary are left out and
-    // inherited back on load.
-    if (a.link) {
-      const link = {}
-      if (a.link.component && a.link.component !== a.component) link.component = a.link.component
-      if (a.link.control && a.link.control !== a.controlName) link.control = a.link.control
-      if (link.component || link.control) qsys.link = link
-    }
-
-    mappings.push({ label: a.label || pc.label, midi: { ...pc.midi }, qsys })
-  }
-  return mappings
-}
-
-document.getElementById('save-btn').addEventListener('click', async () => {
-  const status = document.getElementById('save-status')
-  status.className = ''; status.textContent = 'Saving…'
-  try {
-    const mappings = buildMappings()
-    const result = await api('/api/mappings', { method: 'POST', body: JSON.stringify(mappings) })
-    status.className = 'ok'; status.textContent = '✓ Saved — ' + result.count + ' mappings'
-  } catch (e) {
-    status.className = 'err'; status.textContent = '✗ ' + e.message
-  }
-})
-
-document.getElementById('save-apply-btn').addEventListener('click', async () => {
-  const status = document.getElementById('save-status')
-  status.className = ''; status.textContent = 'Applying…'
-  try {
-    const mappings = buildMappings()
-    const result = await api('/api/mappings/apply', { method: 'POST', body: JSON.stringify(mappings) })
-    status.className = 'ok'; status.textContent = '✓ Applied — ' + result.count + ' mappings'
-  } catch (e) {
-    status.className = 'err'; status.textContent = '✗ ' + e.message
-  }
-})
+document.getElementById('refresh-btn').addEventListener('click', () => { if (editor) editor.reload() })
+document.getElementById('save-btn').addEventListener('click', () => { if (editor) editor.save() })
+document.getElementById('save-apply-btn').addEventListener('click', () => { if (editor) editor.saveAndApply() })
 
 checkSession().catch(e => {
   document.getElementById('login-error').textContent = 'Error: ' + e.message

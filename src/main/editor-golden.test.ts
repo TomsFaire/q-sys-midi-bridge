@@ -13,12 +13,12 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import vm from 'node:vm'
+import { loadSharedEditor, makeDomElement } from './helpers/load-shared-editor.js'
 import { GOLDEN_FIXTURES, KNOB_A1, BANKL } from './helpers/golden-fixtures.js'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type Any = any
 
-const WEB_PAGE = path.join(__dirname, '..', '..', 'assets', 'mappings', 'mappings.html')
 const DESKTOP_PAGE = path.join(__dirname, '..', '..', 'src', 'renderer', 'configurator.html')
 
 function makeElement(tag = 'div'): Any {
@@ -64,34 +64,6 @@ function singleScript(file: string): string {
   return blocks[0]
 }
 
-/**
- * The pages declare `assignments` and `physicalControls` with const/let, which
- * never become vm globals, so the appended shim closes over them.
- */
-function loadWeb(routes: Record<string, Any> = {}): Any {
-  const shim = `
-    globalThis.__editor = {
-      assignments, buildMappings, loadApp,
-      setControls(v) { physicalControls = v },
-    }
-  `
-  const sandbox: Any = {
-    document: makeDocument(),
-    console: { log: () => {}, warn: () => {}, error: () => {} },
-    fetch: async (url: string) => ({
-      ok: true,
-      status: 200,
-      json: async () => routes[url] ?? (url.endsWith('/controls') ? { controls: [] } : {}),
-    }),
-    setTimeout: () => 0, clearTimeout: () => {},
-    Map, Set, JSON, Promise, Array, Object, String, Number, parseFloat, isNaN,
-  }
-  sandbox.window = sandbox
-  vm.createContext(sandbox)
-  vm.runInContext(singleScript(WEB_PAGE) + shim, sandbox)
-  return sandbox.__editor
-}
-
 function loadDesktop(ipc: Record<string, Any> = {}): Any {
   const shim = `
     globalThis.__cfg = {
@@ -125,11 +97,29 @@ function plain(v: Any): Any[] {
   return JSON.parse(JSON.stringify(v))
 }
 
-function buildViaWeb(pc: Any, assignment: Any): Any[] {
-  const editor = loadWeb()
-  editor.setControls([pc])
-  editor.assignments.set(pc.id, assignment)
-  return plain(editor.buildMappings())
+/**
+ * The web page now runs the shared editor, so "web" means MappingEditor.mount
+ * driven through the same adapter contract the page uses. Assignments are
+ * seeded through __internals, as the Link checkbox and selects would.
+ */
+async function mountWeb(pc: Any, mappings: Any[] = []): Promise<Any> {
+  return loadSharedEditor().mount({
+    root: makeDomElement(),
+    adapter: {
+      loadEditorState: async () => ({ physicalControls: [pc], mappings }),
+      getQsysStatus: async () => ({ connected: false }),
+      discoverComponents: async () => [],
+      getComponentControls: async () => [],
+      save: async () => ({ count: 0 }),
+      saveAndApply: async () => ({ count: 0 }),
+    },
+  })
+}
+
+async function buildViaWeb(pc: Any, assignment: Any): Promise<Any[]> {
+  const editor = await mountWeb(pc)
+  editor.__internals.assignments.set(pc.id, assignment)
+  return plain(editor.getMappings())
 }
 
 function buildViaDesktop(pc: Any, assignment: Any): Any[] {
@@ -139,30 +129,26 @@ function buildViaDesktop(pc: Any, assignment: Any): Any[] {
   return plain(cfg.buildMappings())
 }
 
-/** Loads `mappings` through the web page's own loader, then re-emits them. */
+/** Loads `mappings` through the shared editor's own loader, then re-emits them. */
 async function roundTripWeb(pc: Any, mappings: Any[]): Promise<Any[]> {
-  const editor = loadWeb({
-    '/api/mappings': { physicalControls: [pc], mappings },
-    '/api/qsys/components': { components: [] },
-  })
-  await editor.loadApp()
-  return plain(editor.buildMappings())
+  const editor = await mountWeb(pc, mappings)
+  return plain(editor.getMappings())
 }
 
-test('web and desktop editors agree on every golden fixture', () => {
+test('web and desktop editors agree on every golden fixture', async () => {
   assert.equal(GOLDEN_FIXTURES.length, 9, 'golden fixtures must not be emptied or silently shrunk')
   for (const f of GOLDEN_FIXTURES) {
-    const web = buildViaWeb(f.pc, f.assignment)
+    const web = await buildViaWeb(f.pc, f.assignment)
     const desktop = buildViaDesktop(f.pc, f.assignment)
     assert.deepEqual(web, desktop, `hosts disagree on: ${f.name}`)
   }
 })
 
-test('each fixture matches its frozen expected output (web)', () => {
+test('each fixture matches its frozen expected output (web)', async () => {
   assert.equal(GOLDEN_FIXTURES.length, 9, 'golden fixtures must not be emptied or silently shrunk')
   for (const f of GOLDEN_FIXTURES) {
-    if (!f.expected) { assert.deepEqual(buildViaWeb(f.pc, f.assignment), [], f.name); continue }
-    assert.deepEqual(buildViaWeb(f.pc, f.assignment), [f.expected], f.name)
+    if (!f.expected) { assert.deepEqual(await buildViaWeb(f.pc, f.assignment), [], f.name); continue }
+    assert.deepEqual(await buildViaWeb(f.pc, f.assignment), [f.expected], f.name)
   }
 })
 
