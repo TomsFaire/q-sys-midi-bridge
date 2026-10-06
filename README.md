@@ -422,6 +422,14 @@ Q-Sys components/controls to physical MIDImix controls, and **Save** or
 **Save & Apply** (applies live, no restart). Component/control lists are
 fetched live from Q-Sys, same as the desktop version.
 
+### One editor, two windows
+
+The browser page and the desktop Configurator both mount the same editor,
+`assets/shared/mapping-editor.js` (styled by `assets/shared/mapping-editor.css`).
+Adding a new `qsys.*` field means changing it in that one place, not two. The
+**Network** panel (host, UCI port, mappings password, restart) is not part of
+the shared editor and remains desktop-only.
+
 ---
 
 ## Tray menu

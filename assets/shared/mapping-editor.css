@@ -31,21 +31,9 @@
 }
 .filter-input:focus { outline: 2px solid var(--accent); border-color: transparent; }
 
-/* ── LEGACY: the pages' static toolbar markup ──
-   Both pages still carry their own .tabs / .filterbar / #filter-input /
-   #count-label markup until Tasks 6/7 replace it with mount()'s toolbar
-   (.me-toolbar above). These keep it styled in the meantime.
-   Remove this whole block in Task 8, once that markup is gone. */
-.tabs { display: flex; gap: 2px; padding: 0 16px; background: var(--surface); border-bottom: 1px solid var(--border); overflow-x: auto; flex-shrink: 0; }
-.filterbar { display: flex; align-items: center; gap: 8px; padding: 8px 16px; background: var(--bg); border-bottom: 1px solid var(--border); flex-shrink: 0; }
-.filterbar label { font-size: 11px; color: var(--text-dim); }
-.filterbar input[type=search] { padding: 5px 9px; border: 1px solid var(--border); border-radius: 5px; width: 180px; font-size: 12px; background: var(--surface); }
-.filterbar input[type=search]:focus { outline: 2px solid var(--accent); border-color: transparent; }
-#count-label { font-size: 11px; color: var(--text-dim); margin-left: auto; }
-
 /* ── Table ── */
 /* .mapping-editor is the scroll container mount() creates around the table. */
-.mapping-editor, .table-wrap { flex: 1; overflow: auto; }
+.mapping-editor { flex: 1; overflow: auto; }
 .count-label { display: block; padding: 6px 16px; font-size: 11px; color: var(--text-dim); text-align: right; }
 
 table { width: 100%; min-width: 780px; border-collapse: collapse; }
