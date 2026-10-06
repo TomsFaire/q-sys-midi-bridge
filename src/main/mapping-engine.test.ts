@@ -330,3 +330,77 @@ test('the signed encoding reads 65 as up and 63 as down', async () => {
   await new Promise((r) => setImmediate(r))
   assert.deepEqual(written(qrc), [0.5, 0])
 })
+
+// ── Review fixes ─────────────────────────────────────────────────────────────
+
+test('releasing a fader leaves the motor where the operator put it', () => {
+  // The ordinary case: nobody else touches the control. Without recording the
+  // operator's own move, the release snapped the motor back to the last value
+  // the Core had volunteered and the fader lied about the gain.
+  const { qrc, midi, engine } = build(xtouchConfig())
+  pushGain(qrc, -100)                  // Core says bottom; motor parks there
+  midi.pitchBends.length = 0
+  engine.handleNoteOn(1, 105)          // hand on the fader
+  engine.handlePitchBend(2, 16383)     // pulled to the top
+  engine.handleNoteOff(1, 105)         // hand off
+  assert.deepEqual(midi.pitchBends, [[2, 16383]])
+})
+
+test('a hot reload subscribes the faders the new config asks for', async () => {
+  const { qrc, engine } = build(config())   // MIDImix: no faders
+  engine.reload(xtouchConfig())
+  await engine.setupChangeGroup()
+  const asked = qrc.calls
+    .filter((c) => c.method === 'ChangeGroup.AddComponentControl')
+    .map((c) => (c.params as { Component: { Name: string } }).Component.Name)
+  assert.deepEqual(asked, ['Mic.02.Gain'])
+})
+
+test('a hot reload keeps the values the Core already reported', async () => {
+  // Reloading mappings must not blind the encoders: the Core has not changed,
+  // so what it last said about a control is still true.
+  const { qrc, engine } = build(encoderConfig())
+  pushTrim(qrc, 0)
+  engine.reload(encoderConfig())
+  engine.handleCC(1, 16, 1)
+  await new Promise((r) => setImmediate(r))
+  assert.deepEqual(written(qrc), [0.5])
+})
+
+test('setupChangeGroup subscribes a relative encoder target so it has a starting value', async () => {
+  const { qrc, engine } = build(encoderConfig())
+  await engine.setupChangeGroup()
+  const asked = qrc.calls
+    .filter((c) => c.method === 'ChangeGroup.AddComponentControl')
+    .map((c) => (c.params as { Component: { Name: string } }).Component.Name)
+  assert.deepEqual(asked, ['Mic.01.Gain'])
+})
+
+test('a fader writes nothing while the Core is disconnected', async () => {
+  const { qrc, engine } = build(xtouchConfig())
+  qrc.isConnected = false
+  engine.handlePitchBend(2, 16383)
+  await new Promise((r) => setImmediate(r))
+  assert.deepEqual(qrc.calls.filter((c) => c.method === 'Component.Set'), [])
+})
+
+test('a fader pointed at an action that is not a component control writes nothing', async () => {
+  // resolveTargets would otherwise hand back empty strings and the bridge
+  // would hammer the Core with Component.Set {Name: ""} on every move.
+  const cfg = xtouchConfig()
+  cfg.mappings[0].qsys = { type: 'named_control', name: 'MasterGain' }
+  const { qrc, engine } = build(cfg)
+  engine.handlePitchBend(2, 8192)
+  await new Promise((r) => setImmediate(r))
+  assert.deepEqual(qrc.calls.filter((c) => c.method === 'Component.Set'), [])
+})
+
+test('unplugging the surface mid-touch does not leave a fader suppressed forever', () => {
+  // No note_off ever arrives for a fader held while the cable goes. Without
+  // forgetting the touch, that motor stays frozen for the life of the process.
+  const { qrc, midi, engine } = build(xtouchConfig())
+  engine.handleNoteOn(1, 105)
+  engine.forgetSurfaceState()
+  pushGain(qrc, 20)
+  assert.deepEqual(midi.pitchBends, [[2, 16383]])
+})

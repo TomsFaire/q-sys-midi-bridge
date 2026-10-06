@@ -125,9 +125,20 @@ export class MappingEngine {
   handlePitchBend(channel: number, value14: number): void {
     const mapping = this.pitchBendMap.get(channel)
     if (!mapping) return
+    if (!this.qrc.isConnected) return
     const q = mapping.qsys
+    if (q.type !== 'component_control' && q.type !== 'component_control_relative') {
+      // Without a component and control to resolve, setTargets would write to
+      // Name: "" on every message of a sweep.
+      console.warn(`[Bridge] "${mapping.label ?? 'fader'}": a fader needs a component_control target`)
+      return
+    }
     const db = this.scaleFrom14Bit(value14, q.min ?? 0, q.max ?? 1)
     const targets = resolveTargets(q)
+    // Record where the operator put it. The Core does not push our own writes
+    // back on this connection, so without this the release below would snap
+    // the motor to whatever value the Core last volunteered.
+    for (const t of targets) this.controlValues.set(keyOf(t), db)
     this.setTargets(targets, db).catch((err) => {
       console.error(`[Bridge] QRC error for "${mapping.label ?? 'fader'}": ${err.message}`)
     })
@@ -147,6 +158,15 @@ export class MappingEngine {
     if (value !== undefined) this.driveFader(key, value)
   }
 
+  /**
+   * Forget what the control surface was doing. A fader held when the cable
+   * goes never sends its release, and a touch nobody can clear would freeze
+   * that motor for the life of the process.
+   */
+  forgetSurfaceState(): void {
+    this.touchedFaders.clear()
+  }
+
   get mappingCount(): number {
     return this.ccMap.size + this.noteMap.size + this.pitchBendMap.size
   }
@@ -162,9 +182,14 @@ export class MappingEngine {
 
   /** Hot-reload mappings from a new config without restarting the app. */
   reload(config: Config): void {
+    // The config object backs setupChangeGroup() and the feedback.enabled
+    // checks, so a reload that didn't adopt it would re-subscribe the old set.
+    this.config = config
     this.toggleState.clear()
     this.touchedFaders.clear()
-    this.controlValues.clear()
+    // controlValues is what the Core said, not what the config says. Clearing
+    // it would leave every relative encoder with nothing to add to until
+    // something moved that control from elsewhere.
     this.buildIndexes(config)
     console.log(
       `[Bridge] Mappings reloaded — ${this.ccMap.size} CC, ${this.noteMap.size} note, ` +
@@ -213,7 +238,10 @@ export class MappingEngine {
 
   async setupChangeGroup(): Promise<void> {
     if (!this.config.feedback.enabled) return
-    if (this.ledMap.size === 0 && this.faderFeedback.size === 0) return
+    const hasRelative = this.config.mappings.some(
+      (m) => m.qsys.type === 'component_control_relative',
+    )
+    if (this.ledMap.size === 0 && this.faderFeedback.size === 0 && !hasRelative) return
 
     // Group controls by component for the ChangeGroup subscription. Faders
     // ride in the same group as the mutes: the Core's change group budget is
@@ -227,6 +255,15 @@ export class MappingEngine {
     for (const led of this.config.feedback.mute_leds) subscribe(led.component, led.control)
     for (const fader of this.config.feedback.fader_positions ?? []) {
       subscribe(fader.component, fader.control)
+    }
+    // A relative encoder adds a delta to the Core's value, so it only works
+    // once the Core reports that value — which means subscribing its target
+    // whether or not the control is also on a motor or an LED.
+    for (const mapping of this.config.mappings) {
+      if (mapping.qsys.type !== 'component_control_relative') continue
+      for (const t of resolveTargets(mapping.qsys)) {
+        if (t.component && t.control) subscribe(t.component, t.control)
+      }
     }
 
     for (const [component, controls] of byComponent) {

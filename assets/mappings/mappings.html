@@ -131,6 +131,8 @@
 let physicalControls = []
 // Mappings for hardware this page doesn't model, held across a save.
 let foreignMappings = []
+// The only two Q-SYS actions this page can show and re-emit.
+const EDITABLE_ACTIONS = ['component_control', 'toggle']
 let components = []
 const ctrlCache = new Map()
 const assignments = new Map()
@@ -191,14 +193,15 @@ async function loadApp() {
   for (const mObj of data.mappings) {
     const pc = physicalControls.find(p =>
       p.midi.type === mObj.midi.type && p.midi.channel === mObj.midi.channel && p.midi.number === mObj.midi.number)
-    if (!pc) {
-      // A mapping for hardware this page doesn't model — an X-Touch fader on
-      // pitch bend, say. This page rewrites the whole array on save, so hold
-      // it verbatim and put it back, or saving here would delete the surface.
+    // This page can only express a knob or a toggle on a MIDImix control, and
+    // it rewrites the whole array on save. Anything else is held verbatim and
+    // put back: an X-Touch fader matches no control here, but a V-Pot on CC 22
+    // matches "Mute 1" exactly, and rewriting it as a toggle would corrupt it.
+    if (!pc || !EDITABLE_ACTIONS.includes(mObj.qsys.type)) {
       foreignMappings.push(mObj)
       continue
     }
-    if (pc) {
+    {
       assignments.set(pc.id, {
         component: mObj.qsys.component ?? '',
         controlName: mObj.qsys.control ?? '',

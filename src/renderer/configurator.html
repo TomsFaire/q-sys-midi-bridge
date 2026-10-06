@@ -362,6 +362,8 @@ const { ipcRenderer, clipboard } = require('electron')
 let physicalControls = []
 // Mappings for hardware this window doesn't model, held across a save.
 let foreignMappings = []
+// The only two Q-SYS actions this window can show and re-emit.
+const EDITABLE_ACTIONS = ['component_control', 'toggle']
 let components = []                   // [{name, type}]
 const ctrlCache = new Map()           // componentName → [{name, isBoolean}]
 // assignments: controlId → {component, controlName, min, max, label, link}
@@ -388,14 +390,16 @@ async function init() {
         p.midi.channel === m.midi.channel &&
         p.midi.number === m.midi.number
       )
-      if (!pc) {
-        // Hardware this window doesn't model — an X-Touch fader on pitch
-        // bend, say. Saving here rewrites the whole array, so hold it
-        // verbatim and put it back rather than deleting the surface.
+      // This window can only express a knob or a toggle on a MIDImix control,
+      // and it rewrites the whole array on save. Anything else is held
+      // verbatim and put back: an X-Touch fader matches no control here, but a
+      // V-Pot on CC 22 matches "Mute 1" exactly, and rewriting it as a toggle
+      // would corrupt it.
+      if (!pc || !EDITABLE_ACTIONS.includes(m.qsys.type)) {
         foreignMappings.push(m)
         continue
       }
-      if (pc) {
+      {
         assignments.set(pc.id, {
           component:   m.qsys.component  ?? '',
           controlName: m.qsys.control    ?? '',

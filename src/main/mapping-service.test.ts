@@ -157,3 +157,14 @@ test('validateMappings accepts both encodings it knows', () => {
     assert.equal(result.valid, true, `${encoding} should be valid`)
   }
 })
+
+test('validateMappings accepts a link on a relative encoder, which the engine gangs', () => {
+  // The engine resolves link targets for component_control_relative, so
+  // rejecting it here would fail the whole save for a config that works.
+  const result = validateMappings([
+    { midi: { type: 'cc', channel: 1, number: 16 },
+      qsys: { type: 'component_control_relative', component: 'Dante.In.9.Gain', control: 'gain',
+              step: 0.5, link: { component: 'Dante.In.10.Gain' } } },
+  ])
+  assert.equal(result.valid, true)
+})

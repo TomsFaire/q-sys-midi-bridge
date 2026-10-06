@@ -166,7 +166,7 @@ export function validateMappings(
   // A gang needs a component to inherit, so named_control and snapshot can't
   // carry one. Rejecting rather than ignoring keeps a typo from silently
   // moving only one leg of a pair.
-  const linkableTypes = new Set(['component_control', 'toggle'])
+  const linkableTypes = new Set(['component_control', 'component_control_relative', 'toggle'])
   mappings.forEach((entry, index) => {
     const e = entry as Record<string, unknown>
     const midi = e?.midi as Record<string, unknown> | undefined

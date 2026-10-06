@@ -37,6 +37,8 @@ export class Bridge extends EventEmitter {
     })
     this.midi.on('disconnect', () => {
       console.log('[MIDI] Device disconnected')
+      // Any fader held as the cable went will never send its release.
+      this.engine.forgetSurfaceState()
       this.emit('status-change')
     })
 

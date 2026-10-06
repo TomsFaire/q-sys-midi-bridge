@@ -426,7 +426,9 @@ value Q-SYS last reported rather than scaling an absolute one:
 `step` is how far one tick moves the value (default 1) and `min`/`max` clamp the
 result. A tick arriving before Q-SYS has reported a starting value is ignored —
 there is nothing to add to, and guessing would jump the gain somewhere nobody
-asked for.
+asked for. The bridge subscribes each encoder's target to the ChangeGroup for
+exactly this reason, so no extra `fader_positions` entry is needed to make one
+work.
 
 `encoding` selects how a tick is spelled, and the default `"mcu"` is what an
 X-Touch sends: `0x01`–`0x3F` clockwise, `0x41`–`0x7F` anticlockwise, magnitude in

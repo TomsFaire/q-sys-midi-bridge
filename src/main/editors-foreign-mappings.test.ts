@@ -11,6 +11,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import vm from 'node:vm'
+import { PHYSICAL_CONTROLS } from './mapping-service.js'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type Any = any
@@ -89,10 +90,34 @@ const ENCODER_MAPPING = {
   },
 }
 
+/**
+ * The MCU address space overlaps the MIDImix table: V-Pots are CC 16-23 on
+ * channel 1 and MIDImix mutes are CC 22-29 on channel 1, so V-Pot 7 and Mute 1
+ * are the same address. Select buttons are notes 24-31, and the MIDImix bottom
+ * row is notes 25-27. A mapping at a colliding address is still not a MIDImix
+ * control, and rewriting it as one corrupts it.
+ */
+const COLLIDING_ENCODER = {
+  label: 'V-Pot 7',
+  midi: { type: 'cc', channel: 1, number: 22 },   // also MIDImix "Mute 1"
+  qsys: {
+    type: 'component_control_relative', component: 'Mic.07.Gain', control: 'gain',
+    step: 0.5, min: -18, max: 18, encoding: 'mcu',
+  },
+}
+
+const COLLIDING_SELECT = {
+  label: 'Select 2',
+  midi: { type: 'note_on', channel: 1, number: 25 },  // also MIDImix "Bank Left"
+  qsys: { type: 'snapshot', bank: 1, slot: 2 },
+}
+
 const STORED = [MIDIMIX_MAPPING, FADER_MAPPING, ENCODER_MAPPING]
 
 /** Loads the browser editor, runs its loadApp(), returns what a Save emits. */
-async function browserRoundTrip(): Promise<Any[]> {
+async function browserRoundTrip(
+  controls: Any[] = [MUTE_1], stored: Any[] = STORED,
+): Promise<Any[]> {
   const sandbox: Any = {
     document: makeDocument(),
     console: { log: () => {}, warn: () => {}, error: () => {} },
@@ -101,7 +126,7 @@ async function browserRoundTrip(): Promise<Any[]> {
       status: 200,
       json: async () => {
         if (url.endsWith('/api/mappings')) {
-          return { physicalControls: [MUTE_1], mappings: STORED }
+          return { physicalControls: controls, mappings: stored }
         }
         // loadApp() renders the table, which needs the component list.
         if (url.endsWith('/api/qsys/components')) return { components: [] }
@@ -121,7 +146,9 @@ async function browserRoundTrip(): Promise<Any[]> {
 }
 
 /** Loads the Configurator, runs its init(), returns what a Save emits. */
-async function configuratorRoundTrip(): Promise<Any[]> {
+async function configuratorRoundTrip(
+  controls: Any[] = [MUTE_1], stored: Any[] = STORED,
+): Promise<Any[]> {
   const sandbox: Any = {
     document: makeDocument(),
     console: { log: () => {}, warn: () => {}, error: () => {} },
@@ -131,8 +158,8 @@ async function configuratorRoundTrip(): Promise<Any[]> {
       return {
         ipcRenderer: {
           invoke: async (ch: string) => {
-            if (ch === 'cfg:get-physical-controls') return [MUTE_1]
-            if (ch === 'cfg:load-config') return { mappings: STORED }
+            if (ch === 'cfg:get-physical-controls') return controls
+            if (ch === 'cfg:load-config') return { mappings: stored }
             // Everything init() fans out to afterwards, answered in the
             // shapes it expects so no stray rejection outlives the test.
             // Both of these answer with a bare array, not a wrapper object.
@@ -193,4 +220,30 @@ test('the Configurator still rewrites the mappings it does model', async () => {
   const mute = find(saved, 'Mic 1 Mute')
   assert.equal(mute.qsys.component, 'Mic.01.Gain')
   assert.equal(saved.length, 3)
+})
+
+
+// ── Addresses that collide with a real MIDImix control ───────────────────────
+
+const REAL = JSON.parse(JSON.stringify(PHYSICAL_CONTROLS))
+const COLLIDING = [MIDIMIX_MAPPING, COLLIDING_ENCODER, COLLIDING_SELECT]
+
+test('the browser editor does not rewrite a V-Pot sharing an address with a mute', async () => {
+  const saved = await browserRoundTrip(REAL, COLLIDING)
+  assert.deepEqual(find(saved, 'V-Pot 7'), COLLIDING_ENCODER)
+})
+
+test('the browser editor does not rewrite a Select sharing an address with Bank Left', async () => {
+  const saved = await browserRoundTrip(REAL, COLLIDING)
+  assert.deepEqual(find(saved, 'Select 2'), COLLIDING_SELECT)
+})
+
+test('the Configurator does not rewrite a V-Pot sharing an address with a mute', async () => {
+  const saved = await configuratorRoundTrip(REAL, COLLIDING)
+  assert.deepEqual(find(saved, 'V-Pot 7'), COLLIDING_ENCODER)
+})
+
+test('the Configurator does not rewrite a Select sharing an address with Bank Left', async () => {
+  const saved = await configuratorRoundTrip(REAL, COLLIDING)
+  assert.deepEqual(find(saved, 'Select 2'), COLLIDING_SELECT)
 })
