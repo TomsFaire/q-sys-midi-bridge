@@ -360,6 +360,8 @@ const { ipcRenderer, clipboard } = require('electron')
 // ── State ────────────────────────────────────────────────────────────────────
 
 let physicalControls = []
+// Mappings for hardware this window doesn't model, held across a save.
+let foreignMappings = []
 let components = []                   // [{name, type}]
 const ctrlCache = new Map()           // componentName → [{name, isBoolean}]
 // assignments: controlId → {component, controlName, min, max, label, link}
@@ -379,12 +381,20 @@ async function init() {
   setOverlay('Loading existing assignments…')
   try {
     const cfg = await ipcRenderer.invoke('cfg:load-config')
+    foreignMappings = []
     for (const m of cfg.mappings ?? []) {
       const pc = physicalControls.find(p =>
         p.midi.type === m.midi.type &&
         p.midi.channel === m.midi.channel &&
         p.midi.number === m.midi.number
       )
+      if (!pc) {
+        // Hardware this window doesn't model — an X-Touch fader on pitch
+        // bend, say. Saving here rewrites the whole array, so hold it
+        // verbatim and put it back rather than deleting the surface.
+        foreignMappings.push(m)
+        continue
+      }
       if (pc) {
         assignments.set(pc.id, {
           component:   m.qsys.component  ?? '',
@@ -689,7 +699,8 @@ document.getElementById('refresh-btn').addEventListener('click', async () => {
 // ── Save ──────────────────────────────────────────────────────────────────────
 
 function buildMappings() {
-  const mappings = []
+  // Mappings this window can't show go back exactly as they came in.
+  const mappings = foreignMappings.map(m => JSON.parse(JSON.stringify(m)))
   for (const pc of physicalControls) {
     const a = assignments.get(pc.id)
     if (!a?.component || !a?.controlName) continue

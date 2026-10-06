@@ -129,6 +129,8 @@
 
 <script>
 let physicalControls = []
+// Mappings for hardware this page doesn't model, held across a save.
+let foreignMappings = []
 let components = []
 const ctrlCache = new Map()
 const assignments = new Map()
@@ -185,9 +187,17 @@ async function loadApp() {
   const data = await api('/api/mappings')
   physicalControls = data.physicalControls
   assignments.clear()
+  foreignMappings = []
   for (const mObj of data.mappings) {
     const pc = physicalControls.find(p =>
       p.midi.type === mObj.midi.type && p.midi.channel === mObj.midi.channel && p.midi.number === mObj.midi.number)
+    if (!pc) {
+      // A mapping for hardware this page doesn't model — an X-Touch fader on
+      // pitch bend, say. This page rewrites the whole array on save, so hold
+      // it verbatim and put it back, or saving here would delete the surface.
+      foreignMappings.push(mObj)
+      continue
+    }
     if (pc) {
       assignments.set(pc.id, {
         component: mObj.qsys.component ?? '',
@@ -478,7 +488,8 @@ document.getElementById('refresh-btn').addEventListener('click', async () => {
 })
 
 function buildMappings() {
-  const mappings = []
+  // Mappings this page can't show go back exactly as they came in.
+  const mappings = foreignMappings.map(m => JSON.parse(JSON.stringify(m)))
   for (const pc of physicalControls) {
     const a = assignments.get(pc.id)
     if (!a?.component || !a?.controlName) continue
