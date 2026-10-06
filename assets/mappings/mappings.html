@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <title>MIDI Mappings</title>
+<link rel="stylesheet" href="/shared/mapping-editor.css">
 <style>
   :root {
     --bg: #f5f5f7; --surface: #ffffff; --border: #d1d1d6; --text: #1c1c1e;
@@ -31,41 +32,6 @@
   .login-card input[type=password] { padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 13px; }
   .login-card p.hint { font-size: 12px; color: var(--text-dim); }
   .login-card p.err { font-size: 12px; color: var(--red); min-height: 14px; }
-
-  .tabs { display: flex; gap: 2px; padding: 0 16px; background: var(--surface); border-bottom: 1px solid var(--border); overflow-x: auto; }
-  .tab { padding: 8px 12px; background: none; color: var(--text-dim); border-bottom: 2px solid transparent; margin-bottom: -1px; font-size: 12px; font-weight: 500; white-space: nowrap; }
-  .tab:hover { color: var(--text); }
-  .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
-
-  .filterbar { display: flex; align-items: center; gap: 8px; padding: 8px 16px; background: var(--bg); border-bottom: 1px solid var(--border); }
-  .filterbar input[type=search] { padding: 5px 9px; border: 1px solid var(--border); border-radius: 5px; width: 180px; font-size: 12px; background: var(--surface); }
-  #count-label { font-size: 11px; color: var(--text-dim); margin-left: auto; }
-
-  .table-wrap { flex: 1; overflow-x: auto; }
-  table { width: 100%; min-width: 780px; border-collapse: collapse; }
-  thead tr { background: var(--surface); }
-  th { padding: 7px 10px; text-align: left; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.4px; color: var(--text-dim); border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--surface); }
-  td { padding: 5px 6px; border-bottom: 1px solid var(--border); vertical-align: middle; }
-  tr.group-row { background: var(--group-bg); }
-  tr.group-row td { padding: 4px 10px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.6px; color: var(--text-dim); }
-  tr.ctrl-row.assigned { background: #f0fff4; }
-  .badge { display: inline-block; padding: 2px 7px; border-radius: 4px; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px; }
-  .badge-fader { background: #d1f0d1; color: #1a6b1a; }
-  .badge-knob  { background: #d4e5ff; color: #003fa8; }
-  .badge-toggle{ background: #ffe5d4; color: #a83000; }
-  select, input[type=text], input[type=number] { width: 100%; padding: 4px 6px; border: 1px solid var(--border); border-radius: 4px; background: var(--surface); font-size: 12px; color: var(--text); font-family: inherit; }
-  select:disabled, input:disabled { background: var(--bg); color: var(--text-dim); }
-  .td-label { font-size: 12px; font-weight: 500; padding-left: 10px; white-space: nowrap; }
-  .td-clear { text-align: center; }
-  .td-link { text-align: center; }
-  .td-link input[type=checkbox] { width: auto; cursor: pointer; }
-  .leg { display: inline-block; width: 13px; font-size: 10px; font-weight: 700; color: var(--text-dim); }
-  tr.link-row { background: #f0fff4; }
-  tr.link-row td { border-bottom: 1px solid var(--border); }
-  tr.link-row .td-label { padding-left: 22px; font-weight: 400; color: var(--text-dim); }
-  .shared-hint { font-size: 10px; color: var(--text-dim); font-style: italic; }
-  .clear-btn { background: none; color: var(--text-dim); font-size: 13px; padding: 2px 5px; border-radius: 3px; }
-  .clear-btn:hover { background: #ffe5e5; color: var(--red); }
 
   footer { display: flex; align-items: center; gap: 10px; padding: 10px 16px; background: var(--surface); border-top: 1px solid var(--border); }
   #save-status { font-size: 12px; color: var(--text-dim); }

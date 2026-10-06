@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <title>Configure Mappings</title>
+  <link rel="stylesheet" href="../../assets/shared/mapping-editor.css">
   <style>
     :root {
       --bg: #f5f5f7;
@@ -68,49 +69,9 @@
     .btn-warn:hover { background: #cc7800; }
     .btn-warn:disabled { background: var(--border); color: var(--text-dim); cursor: not-allowed; }
 
-    /* ── Tabs ── */
-    .tabs {
-      display: flex; gap: 2px;
-      padding: 0 14px;
-      background: var(--surface);
-      border-bottom: 1px solid var(--border);
-      flex-shrink: 0;
-    }
-    .tab {
-      padding: 7px 11px; background: none; color: var(--text-dim);
-      border-bottom: 2px solid transparent; margin-bottom: -1px;
-      font-size: 12px; font-weight: 500;
-    }
-    .tab:hover { color: var(--text); }
-    .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
-
-    /* ── Filter bar ── */
-    .filterbar {
-      display: flex; align-items: center; gap: 8px;
-      padding: 6px 14px;
-      background: var(--bg);
-      border-bottom: 1px solid var(--border);
-      flex-shrink: 0;
-    }
-    .filterbar label { font-size: 11px; color: var(--text-dim); }
-    .filterbar input[type=search] {
-      padding: 4px 8px; border: 1px solid var(--border);
-      border-radius: 5px; width: 180px; font-size: 12px;
-      background: var(--surface);
-    }
-    .filterbar input[type=search]:focus { outline: 2px solid var(--accent); border-color: transparent; }
-    #count-label { font-size: 11px; color: var(--text-dim); margin-left: auto; }
-
-    /* ── Table ── */
-    .table-wrap {
-      flex: 1; overflow-y: auto;
-    }
-
-    table {
-      width: 100%; border-collapse: collapse;
-      table-layout: fixed;
-    }
-
+    /* Rules for markup the shared editor does not emit (colgroup, .td-type).
+       Left in place; they go with the page's own table in Task 7. */
+    table { table-layout: fixed; }
     colgroup col:nth-child(1) { width: 120px; }  /* label */
     colgroup col:nth-child(2) { width: 72px; }   /* type */
     colgroup col:nth-child(3) { width: 210px; }  /* component */
@@ -118,63 +79,7 @@
     colgroup col:nth-child(5) { width: 68px; }   /* min */
     colgroup col:nth-child(6) { width: 68px; }   /* max */
     colgroup col:nth-child(7) { width: 36px; }   /* clear */
-
-    thead { position: sticky; top: 0; z-index: 10; }
-    thead tr { background: var(--surface); }
-
-    th {
-      padding: 6px 10px; text-align: left;
-      font-size: 10px; font-weight: 600;
-      text-transform: uppercase; letter-spacing: 0.4px;
-      color: var(--text-dim); border-bottom: 1px solid var(--border);
-    }
-
-    td { padding: 4px 6px; border-bottom: 1px solid var(--border); vertical-align: middle; }
-
-    tr.group-row { background: var(--group-bg); }
-    tr.group-row td {
-      padding: 3px 10px;
-      font-size: 10px; font-weight: 700;
-      text-transform: uppercase; letter-spacing: 0.6px;
-      color: var(--text-dim);
-    }
-
-    tr.ctrl-row:hover { background: #f0f0f5; }
-    tr.ctrl-row.assigned { background: #f0fff4; }
-    tr.ctrl-row.assigned:hover { background: #e6ffe8; }
-
-    /* Type badges */
-    .badge {
-      display: inline-block; padding: 2px 7px; border-radius: 4px;
-      font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px;
-    }
-    .badge-fader  { background: #d1f0d1; color: #1a6b1a; }
-    .badge-knob   { background: #d4e5ff; color: #003fa8; }
-    .badge-toggle { background: #ffe5d4; color: #a83000; }
-
-    /* Selects & inputs */
-    select, input[type=text], input[type=number] {
-      width: 100%; padding: 3px 5px;
-      border: 1px solid var(--border); border-radius: 4px;
-      background: var(--surface); font-size: 12px;
-      color: var(--text); font-family: inherit;
-    }
-    select:focus, input:focus { outline: 2px solid var(--accent); border-color: transparent; }
-    select:disabled, input:disabled {
-      background: var(--bg); color: var(--text-dim); cursor: default;
-    }
-    input[type=number] { -moz-appearance: textfield; }
-    input[type=number]::-webkit-inner-spin-button { opacity: 0.5; }
-
-    .td-label { font-size: 12px; font-weight: 500; padding-left: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .td-type  { text-align: center; }
-    .td-clear { text-align: center; }
-
-    .clear-btn {
-      background: none; color: var(--text-dim); font-size: 13px;
-      padding: 2px 5px; border-radius: 3px;
-    }
-    .clear-btn:hover { background: #ffe5e5; color: var(--red); }
 
     .hidden { display: none; }
 
