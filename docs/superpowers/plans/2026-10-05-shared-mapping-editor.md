@@ -535,14 +535,56 @@ git commit -m "Add mount, adapter contract and event handling to the shared edit
 
 - [ ] **Step 1: Create the stylesheet**
 
-Move from `assets/mappings/mappings.html`'s `<style>`: `.table-wrap`, `table`, `thead tr`, `th`, `td`, `tr.group-row`, `tr.ctrl-row.assigned`, `.badge*`, `select`/`input` rules, `.td-label`, `.td-clear`, `.clear-btn`, `.td-link`, `.leg`, `tr.link-row`, `.shared-hint`, `.tabs`, `.tab`, `.filterbar`, `#count-label`. Leave the `:root` token block in each page — both already define identical tokens and the stylesheet consumes them.
+Move from `assets/mappings/mappings.html`'s `<style>`: `.table-wrap`, `table`, `thead tr`, `th`, `td`, `tr.group-row`, `tr.ctrl-row.assigned`, `.badge*`, `select`/`input` rules, `.td-label`, `.td-clear`, `.clear-btn`, `.td-link`, `.leg`, `tr.link-row`, `.shared-hint`, `#count-label`. Leave the `:root` token block in each page — both already define identical tokens and the stylesheet consumes them.
 
-- [ ] **Step 2: Link it from both pages**
+**The toolbar selectors changed in Task 4 and must be re-targeted.** `mount`
+now builds its own tab/filter toolbar inside `root`, emitting classes the
+pages' existing CSS does not match. Port the old `.tabs` / `.tab` / `.filterbar`
+/ `#filter-input` rules onto the module's actual markup:
+
+| Old page selector | Module's selector now |
+|---|---|
+| `.tabs` | `.me-tabs` |
+| `.tab`, `.tab.active` | `.tab[data-group]`, `.tab.active` (unchanged) |
+| `.filterbar` | `.me-toolbar` |
+| `#filter-input` | `.filter-input` |
+
+Without this the toolbar renders unstyled in both hosts. The module ships no
+CSS of its own by design — all of it lives here.
+
+- [ ] **Step 2: Serve `assets/shared/` from the UCI server**
+
+The web page's stylesheet link needs this route to exist in the SAME task, or
+the page 404s between tasks. Add a handler in `src/main/uci-server.ts` beside
+the existing `/mappings` and `/foh-uci` ones, mapping `GET /shared/<file>` to
+`assets/shared/<file>` with `text/css` or `text/javascript`. Reject any path
+containing `..`.
+
+Follow the server-test style in `src/main/uci-state-sync.test.ts`: start the
+real server on port 0, read the assigned port, use `fetch`.
+
+```ts
+test('the UCI server serves the shared editor script', async () => {
+  const { port, stop } = await startServer()
+  const res = await fetch(`http://127.0.0.1:${port}/shared/mapping-editor.js`)
+  assert.equal(res.status, 200)
+  assert.match(res.headers.get('content-type') ?? '', /javascript/)
+  await stop()
+})
+
+test('the shared route refuses path traversal', async () => {
+  const { port, stop } = await startServer()
+  // Encoded so fetch does not normalise the .. away before it reaches us.
+  const res = await fetch(`http://127.0.0.1:${port}/shared/%2E%2E%2F%2E%2E%2Fpackage.json`)
+  assert.equal(res.status, 404)
+  await stop()
+})
+```
+
+- [ ] **Step 3: Link the stylesheet from both pages**
 
 `assets/mappings/mappings.html`: `<link rel="stylesheet" href="/shared/mapping-editor.css">`
 `src/renderer/configurator.html`: `<link rel="stylesheet" href="../../assets/shared/mapping-editor.css">`
-
-The web path requires a route — see Task 6 Step 1.
 
 - [ ] **Step 3: Verify both pages still render**
 
@@ -565,11 +607,9 @@ git commit -m "Share the mapping-editor stylesheet between both hosts"
 - Modify: `src/main/uci-server.ts` (serve `/shared/*`)
 - Modify: `src/main/mapping-editor.test.ts`
 
-- [ ] **Step 1: Serve `assets/shared/` from the UCI server**
+- [ ] **Step 1: (moved to Task 5 — the route already exists; skip)**
 
-Add a route in `uci-server.ts` alongside the existing `/mappings` and `/foh-uci` handlers, mapping `GET /shared/<file>` to `assets/shared/<file>` with `text/css` or `text/javascript`. Reject any path containing `..`.
-
-- [ ] **Step 2: Write the failing test**
+- [ ] **Step 2: (moved to Task 5 — these tests already exist; skip)**
 
 Follow the existing `uci-server` test style in `src/main/uci-state-sync.test.ts`:
 start the real server on port 0, read the assigned port, and use `fetch`.
