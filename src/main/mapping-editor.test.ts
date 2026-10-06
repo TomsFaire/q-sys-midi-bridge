@@ -812,6 +812,19 @@ test('shared stylesheet centres the Type column header like its body cells', () 
 
 // ── Final whole-branch review fixes ─────────────────────────────────────────
 
+test('every ipcRenderer.on channel the configurator registers is known and covered', async () => {
+  const p = await runConfigurator()
+  assert.deepEqual([...p.ipcHandlers.keys()], ['cfg:host-connected'])
+})
+
+test('cfg:host-connected re-discovers components and confirms, without throwing', async () => {
+  const p = await runConfigurator()
+  p.calls.length = 0
+  await p.ipcHandlers.get('cfg:host-connected')!()
+  assert.deepEqual(p.calls, ['refreshComponents'])
+  assert.equal(p.els.get('host-status').textContent, '✓ Connected')
+})
+
 // Guessed Min/Max: driven through the real change listener, as a browser
 // fires it (input per keystroke, then change on commit).
 async function nameControl(ed: any, id: string, name: string, commit = true) {

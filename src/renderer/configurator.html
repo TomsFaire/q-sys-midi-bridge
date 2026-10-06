@@ -340,8 +340,9 @@ document.getElementById('host-save-btn').addEventListener('click', async () => {
 
 // Main process pushes this when the configurator's QRC connects after a host change
 ipcRenderer.on('cfg:host-connected', async () => {
-  await refreshQsys()
-  renderTable()
+  // refreshComponents re-runs discover(), whose getQsysStatus call also
+  // redraws the header pill.
+  if (editor) await editor.refreshComponents()
   const hostStatus = document.getElementById('host-status')
   hostStatus.textContent = '✓ Connected'
   setTimeout(() => { hostStatus.textContent = '' }, 3000)
