@@ -1634,27 +1634,40 @@ const inputLabels = {};
 });
 
 // ── fader dB math ──────────────────────────────────────────────────────────────
-// pos 0..1 → dB.  Reference: pos=0.75 → 0 dB, pos=0 → −∞ (−100), pos=1 → +10
+// pos 0..1 → dB.  Reference: pos=0.75 → 0 dB, pos=0 → −∞ (−100), pos=1 → +20
+//
+// MAX matches the maximum on a Q-SYS Gain block, which is what these faders
+// drive. The rest of this file already assumed +20 — the AFC gain slider's
+// max, and VU_MAX_DB — so the fader maths was the holdout, and anything above
+// +10 arriving from the Core (or from the MIDI bridge) positioned the handle
+// off the top of the track.
+const FADER_REF = 0.75;
+const FADER_MAX_DB = 20;
 function posToDb(pos) {
   if (pos < 0.005) return -100;
-  const REF = 0.75;
-  if (pos <= REF) {
+  if (pos <= FADER_REF) {
     // map 0..REF → -60..0  (log taper)
-    const t = pos / REF; // 0..1
+    const t = pos / FADER_REF; // 0..1
     return -60 * (1 - Math.pow(t, 0.5));
   } else {
-    // map REF..1 → 0..+10 (linear)
-    return 10 * (pos - REF) / (1 - REF);
+    // map REF..1 → 0..+MAX (linear)
+    return FADER_MAX_DB * (pos - FADER_REF) / (1 - FADER_REF);
   }
 }
 function dbToPos(db) {
   if (db <= -100) return 0;
-  const REF = 0.75;
   if (db <= 0) {
-    const t = Math.pow(1 + db / 60, 2);
-    return t * REF;
+    // Clamped at the taper floor: below −60 dB, (1 + db/60) goes negative and
+    // squaring folds it back positive and growing, so −95 dB used to render
+    // a quarter of the way up the track — higher than −30 dB. The bridge maps
+    // faders from −100, so the whole band is reachable from the hardware.
+    const t = Math.pow(Math.max(0, 1 + db / 60), 2);
+    return t * FADER_REF;
   } else {
-    return REF + (1 - REF) * db / 10;
+    // Clamped: a Gain block can be configured past FADER_MAX_DB, and
+    // setFaderPos writes this value straight into style.bottom as a
+    // percentage — an unclamped result puts the handle outside its track.
+    return Math.min(1, FADER_REF + (1 - FADER_REF) * db / FADER_MAX_DB);
   }
 }
 function formatDb(db) {
