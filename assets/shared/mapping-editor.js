@@ -104,6 +104,22 @@
     const root = el('div')
     root.className = 'mapping-editor'
     const table = el('table')
+    // Column headers. Order matches buildRowElement's cells; the last th is
+    // the clear-button column and is deliberately blank.
+    const thead = el('thead')
+    const headRow = el('tr')
+    const HEADERS = [
+      ['Control'], ['Type'], ['Q-Sys Component'], ['Control Name'], ['Min'], ['Max'],
+      ['Link', 'Gang a second Q-Sys target to this control \u2014 the right leg of a stereo pair'],
+      [''],
+    ]
+    for (const [text, title] of HEADERS) {
+      const th = el('th', { textContent: text })
+      if (title) th.title = title
+      headRow.appendChild(th)
+    }
+    thead.appendChild(headRow)
+    table.appendChild(thead)
     const tbody = el('tbody')
     table.appendChild(tbody)
     const countLabel = el('span', { className: 'count-label' })

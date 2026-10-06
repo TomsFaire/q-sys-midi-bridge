@@ -31,6 +31,18 @@
 }
 .filter-input:focus { outline: 2px solid var(--accent); border-color: transparent; }
 
+/* ── LEGACY: the pages' static toolbar markup ──
+   Both pages still carry their own .tabs / .filterbar / #filter-input /
+   #count-label markup until Tasks 6/7 replace it with mount()'s toolbar
+   (.me-toolbar above). These keep it styled in the meantime.
+   Remove this whole block in Task 8, once that markup is gone. */
+.tabs { display: flex; gap: 2px; padding: 0 16px; background: var(--surface); border-bottom: 1px solid var(--border); overflow-x: auto; flex-shrink: 0; }
+.filterbar { display: flex; align-items: center; gap: 8px; padding: 8px 16px; background: var(--bg); border-bottom: 1px solid var(--border); flex-shrink: 0; }
+.filterbar label { font-size: 11px; color: var(--text-dim); }
+.filterbar input[type=search] { padding: 5px 9px; border: 1px solid var(--border); border-radius: 5px; width: 180px; font-size: 12px; background: var(--surface); }
+.filterbar input[type=search]:focus { outline: 2px solid var(--accent); border-color: transparent; }
+#count-label { font-size: 11px; color: var(--text-dim); margin-left: auto; }
+
 /* ── Table ── */
 /* .mapping-editor is the scroll container mount() creates around the table. */
 .mapping-editor, .table-wrap { flex: 1; overflow: auto; }
@@ -44,6 +56,17 @@ th {
   text-transform: uppercase; letter-spacing: 0.4px; color: var(--text-dim);
   border-bottom: 1px solid var(--border); background: var(--surface);
 }
+/* Column widths live on the th (not a colgroup) so the module emits one
+   header row and nothing else. They hold under both table-layout: auto and
+   the desktop page's fixed layout, which sizes columns from the first row. */
+.mapping-editor th:nth-child(1) { width: 120px; }  /* Control */
+.mapping-editor th:nth-child(2) { width: 72px; }   /* Type */
+.mapping-editor th:nth-child(3) { width: 210px; }  /* Q-Sys Component */
+.mapping-editor th:nth-child(4) { width: 210px; }  /* Control Name */
+.mapping-editor th:nth-child(5) { width: 68px; }   /* Min */
+.mapping-editor th:nth-child(6) { width: 68px; }   /* Max */
+.mapping-editor th:nth-child(7) { width: 48px; }   /* Link */
+.mapping-editor th:nth-child(8) { width: 36px; }   /* clear */
 td { padding: 5px 6px; border-bottom: 1px solid var(--border); vertical-align: middle; }
 
 tr.group-row { background: var(--group-bg); }

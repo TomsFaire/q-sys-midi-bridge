@@ -144,6 +144,16 @@ test('the linked leg also survives a component missing from discovery', () => {
   assert.equal(ed.root.querySelector('.lnk-comp-sel').value, 'Gone.Gain')
 })
 
+test('the table has a thead with the eight column headers in order', () => {
+  const ed = mountForTest({ physicalControls: [KNOB_A1] })
+  const ths = [...ed.root.querySelectorAll('thead tr th')]
+  assert.deepEqual(ths.map((th: any) => th.textContent),
+    ['Control', 'Type', 'Q-Sys Component', 'Control Name', 'Min', 'Max', 'Link', ''])
+  assert.match(ths[6].title, /Gang a second Q-Sys target/)
+  // One header cell per body cell, so the columns line up.
+  assert.equal(ed.root.querySelector('tr.ctrl-row').children.length, ths.length)
+})
+
 test('renderTable emits a group row per group and a shown-count label', () => {
   const ed = mountForTest({ physicalControls: [KNOB_A1, KNOB_A2, MUTE_1] })
   const groups = [...ed.root.querySelectorAll('tr.group-row')].map((r: any) => r.textContent)

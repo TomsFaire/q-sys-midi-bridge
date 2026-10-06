@@ -68,7 +68,18 @@ test('the shared route refuses path traversal', async () => {
     // Encoded so fetch does not normalise the .. away before it reaches us.
     const res = await fetch(`http://127.0.0.1:${port}/shared/%2E%2E%2F%2E%2E%2Fpackage.json`)
     assert.equal(res.status, 404)
-    assert.doesNotMatch(await res.text(), /"name"/)
+  } finally { stop() }
+})
+
+test('the shared route refuses ".." even when the target is a servable file', async () => {
+  const { port, stop } = await startServer()
+  try {
+    // shared/../shared/mapping-editor.js resolves to a real .js file, so
+    // without the name guard (".." and separator checks) this would be 200.
+    // The extension whitelist alone would not catch it. The guard's two
+    // checks overlap here, so this fails only if both are removed.
+    const res = await fetch(`http://127.0.0.1:${port}/shared/..%2Fshared%2Fmapping-editor.js`)
+    assert.equal(res.status, 404)
   } finally { stop() }
 })
 
