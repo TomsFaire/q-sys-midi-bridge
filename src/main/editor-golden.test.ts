@@ -4,7 +4,7 @@
  * Freezes what the two mapping editors emit from buildMappings(), so the
  * shared-editor refactor can prove it changed nothing. The web side drives the
  * shared module (assets/shared/mapping-editor.js) through mount(); the desktop
- * side still extracts and runs the script in src/renderer/configurator.html. The fixtures live
+ * side runs the Configurator's inline script (its IPC adapter) around that same module. The fixtures live
  * in helpers/golden-fixtures.ts (not here) so other tests can import them
  * without re-registering this file's tests.
  */
@@ -65,17 +65,26 @@ function singleScript(file: string): string {
   return blocks[0]
 }
 
-function loadDesktop(ipc: Record<string, Any> = {}): Any {
-  const shim = `
-    globalThis.__cfg = {
-      assignments, buildMappings,
-      setControls(v) { physicalControls = v },
-    }
-  `
+/**
+ * Runs the Configurator's real inline script, with the real shared module and
+ * a stubbed IPC layer serving `pc` and `mappings`, and returns the mounted
+ * handle the page holds.
+ */
+async function mountDesktop(pc: Any, mappings: Any[] = []): Promise<Any> {
+  const ipc: Record<string, Any> = {
+    'cfg:get-physical-controls': [pc],
+    'cfg:load-config': { mappings },
+    'cfg:get-qsys-status': { connected: false },
+  }
+  const doc = makeDocument()
+  const rootEl = makeDomElement()
+  const lookup = doc.getElementById
+  doc.getElementById = (id: string) => (id === 'editor-root' ? rootEl : lookup(id))
   const sandbox: Any = {
-    document: makeDocument(),
+    document: doc,
     console: { log: () => {}, warn: () => {}, error: () => {} },
     setTimeout: () => 0, clearTimeout: () => {},
+    MappingEditor: loadSharedEditor(),
     require: (mod: string) => {
       if (mod !== 'electron') throw new Error(`unexpected require("${mod}")`)
       return {
@@ -86,8 +95,10 @@ function loadDesktop(ipc: Record<string, Any> = {}): Any {
   }
   sandbox.window = sandbox
   vm.createContext(sandbox)
-  vm.runInContext(singleScript(DESKTOP_PAGE) + shim, sandbox)
-  return sandbox.__cfg
+  vm.runInContext(singleScript(DESKTOP_PAGE) + '\nglobalThis.__editor = () => editor', sandbox)
+  for (let i = 0; i < 20 && !sandbox.__editor(); i++) await new Promise((r) => setImmediate(r))
+  assert.ok(sandbox.__editor(), 'the Configurator should have mounted the editor')
+  return sandbox.__editor()
 }
 
 /**
@@ -123,11 +134,10 @@ async function buildViaWeb(pc: Any, assignment: Any): Promise<Any[]> {
   return plain(editor.getMappings())
 }
 
-function buildViaDesktop(pc: Any, assignment: Any): Any[] {
-  const cfg = loadDesktop()
-  cfg.setControls([pc])
-  cfg.assignments.set(pc.id, assignment)
-  return plain(cfg.buildMappings())
+async function buildViaDesktop(pc: Any, assignment: Any): Promise<Any[]> {
+  const editor = await mountDesktop(pc)
+  editor.__internals.assignments.set(pc.id, assignment)
+  return plain(editor.getMappings())
 }
 
 /** Loads `mappings` through the shared editor's own loader, then re-emits them. */
@@ -140,7 +150,7 @@ test('web and desktop editors agree on every golden fixture', async () => {
   assert.equal(GOLDEN_FIXTURES.length, 9, 'golden fixtures must not be emptied or silently shrunk')
   for (const f of GOLDEN_FIXTURES) {
     const web = await buildViaWeb(f.pc, f.assignment)
-    const desktop = buildViaDesktop(f.pc, f.assignment)
+    const desktop = await buildViaDesktop(f.pc, f.assignment)
     assert.deepEqual(web, desktop, `hosts disagree on: ${f.name}`)
   }
 })
@@ -153,11 +163,11 @@ test('each fixture matches its frozen expected output (web)', async () => {
   }
 })
 
-test('each fixture matches its frozen expected output (desktop)', () => {
+test('each fixture matches its frozen expected output (desktop)', async () => {
   assert.equal(GOLDEN_FIXTURES.length, 9, 'golden fixtures must not be emptied or silently shrunk')
   for (const f of GOLDEN_FIXTURES) {
-    if (!f.expected) { assert.deepEqual(buildViaDesktop(f.pc, f.assignment), [], f.name); continue }
-    assert.deepEqual(buildViaDesktop(f.pc, f.assignment), [f.expected], f.name)
+    if (!f.expected) { assert.deepEqual(await buildViaDesktop(f.pc, f.assignment), [], f.name); continue }
+    assert.deepEqual(await buildViaDesktop(f.pc, f.assignment), [f.expected], f.name)
   }
 })
 

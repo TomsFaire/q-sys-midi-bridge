@@ -668,3 +668,127 @@ test('the page adapter turns a failing components probe into disconnected plus t
   const st = JSON.parse(JSON.stringify(await adapter.getQsysStatus()))
   assert.deepEqual(st, { connected: false, message: 'Logon failed' })
 })
+
+// ── Page glue: refresh wiring, shared by both hosts ─────────────────────────
+
+/** Runs a page's single inline script against stubs and returns what it wired. */
+async function runPageScript(html: string, extra: Record<string, any>) {
+  const blocks = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(m => m[1])
+  assert.equal(blocks.length, 1)
+  const listeners = new Map<string, Record<string, () => any>>()
+  const els = new Map<string, any>()
+  const stub = (id: string): any => {
+    let e = els.get(id)
+    if (!e) {
+      e = {
+        addEventListener: (ev: string, fn: () => any) => {
+          const m = listeners.get(id) ?? {}; m[ev] = fn; listeners.set(id, m)
+        },
+        classList: { add() {}, remove() {} }, style: {}, textContent: '', value: '', className: '',
+      }
+      els.set(id, e)
+    }
+    return e
+  }
+  const calls: string[] = []
+  const handle = {
+    save: async () => { calls.push('save') },
+    saveAndApply: async () => { calls.push('saveAndApply') },
+    reload: async () => { calls.push('reload') },
+    refreshComponents: async () => { calls.push('refreshComponents') },
+    getMappings: () => [],
+  }
+  let mountOpts: any = null
+  const sandbox: any = {
+    document: { getElementById: stub },
+    console: { log() {}, warn() {}, error() {} },
+    setTimeout: () => 0, clearTimeout() {},
+    MappingEditor: { mount: async (o: any) => { mountOpts = o; return handle } },
+    ...extra,
+  }
+  sandbox.window = sandbox
+  vm.createContext(sandbox)
+  vm.runInContext(blocks[0] + '\nglobalThis.__adapter = typeof adapter === "undefined" ? null : adapter', sandbox)
+  for (let i = 0; i < 20; i++) await new Promise(r => setImmediate(r))
+  return { listeners, calls, mountOpts: () => mountOpts, adapter: sandbox.__adapter, els }
+}
+
+const okFetch = async (url: string) => ({
+  ok: true, status: 200,
+  json: async () => url.endsWith('/session') ? { passwordSet: true, authenticated: true } : {},
+})
+
+test('mappings page: Refresh Q-Sys calls refreshComponents and never reload', async () => {
+  const p = await runPageScript(PAGE_HTML, { fetch: okFetch })
+  assert.ok(p.mountOpts(), 'page should have mounted the editor')
+  await p.listeners.get('refresh-btn')!.click()
+  assert.deepEqual(p.calls, ['refreshComponents'])
+})
+
+const CONFIGURATOR_HTML = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'renderer', 'configurator.html'), 'utf-8')
+
+function runConfigurator(invoke: (ch: string, ...a: any[]) => any = async () => ({})) {
+  return runPageScript(CONFIGURATOR_HTML, {
+    require: (m: string) => {
+      if (m !== 'electron') throw new Error('unexpected require ' + m)
+      return { ipcRenderer: { invoke, on() {}, send() {} }, clipboard: { writeText() {} } }
+    },
+  })
+}
+
+test('configurator links the shared script and stylesheet by relative file:// path', () => {
+  assert.match(CONFIGURATOR_HTML, /<script src="\.\.\/\.\.\/assets\/shared\/mapping-editor\.js"><\/script>/)
+  assert.match(CONFIGURATOR_HTML, /<link rel="stylesheet" href="\.\.\/\.\.\/assets\/shared\/mapping-editor\.css">/)
+  assert.ok(CONFIGURATOR_HTML.indexOf('shared/mapping-editor.js') < CONFIGURATOR_HTML.indexOf('MappingEditor.mount'))
+})
+
+test('configurator offers an empty #editor-root and no leftover static table or toolbar', () => {
+  assert.match(CONFIGURATOR_HTML, /<div id="editor-root"><\/div>/)
+  assert.doesNotMatch(CONFIGURATOR_HTML, /<thead|<table|<colgroup/)
+  assert.doesNotMatch(CONFIGURATOR_HTML, /id="tbody"/)
+  assert.doesNotMatch(CONFIGURATOR_HTML, /class="tabs"|class="filterbar"|id="filter-input"|id="count-label"/)
+})
+
+test('configurator adapter maps every method to the right IPC channel and arguments', async () => {
+  const calls: any[] = []
+  const invoke = async (ch: string, ...args: any[]) => {
+    calls.push([ch, ...args])
+    if (ch === 'cfg:load-config') return { mappings: [{ label: 'x' }] }
+    if (ch === 'cfg:get-physical-controls') return [{ id: 'F1' }]
+    return { connected: true }
+  }
+  const p = await runConfigurator(invoke)
+  calls.length = 0   // drop startup traffic
+  const m = [{ label: 'x' }]
+  const state = JSON.parse(JSON.stringify(await p.adapter.loadEditorState()))
+  assert.deepEqual(state, { physicalControls: [{ id: 'F1' }], mappings: [{ label: 'x' }] })
+  await p.adapter.getQsysStatus()
+  await p.adapter.discoverComponents()
+  await p.adapter.getComponentControls('Mic 1')
+  await p.adapter.save(m)
+  await p.adapter.saveAndApply(m)
+  assert.deepEqual(calls, [
+    ['cfg:get-physical-controls'],
+    ['cfg:load-config'],
+    ['cfg:get-qsys-status'],
+    ['cfg:discover-components'],
+    ['cfg:get-component-controls', 'Mic 1'],
+    ['cfg:save-config', m],
+    ['cfg:save-and-apply', m],
+  ])
+})
+
+test('configurator adapter treats a config with no mappings key as empty', async () => {
+  const p = await runConfigurator(async (ch) => ch === 'cfg:get-physical-controls' ? [] : {})
+  assert.deepEqual(JSON.parse(JSON.stringify((await p.adapter.loadEditorState()).mappings)), [])
+})
+
+test('configurator buttons: Refresh -> refreshComponents, Save -> save, Save & Apply -> saveAndApply', async () => {
+  const p = await runConfigurator()
+  assert.ok(p.mountOpts(), 'page should have mounted the editor')
+  await p.listeners.get('refresh-btn')!.click()
+  assert.deepEqual(p.calls, ['refreshComponents'])
+  await p.listeners.get('save-btn')!.click()
+  await p.listeners.get('save-restart-btn')!.click()
+  assert.deepEqual(p.calls, ['refreshComponents', 'save', 'saveAndApply'])
+})
