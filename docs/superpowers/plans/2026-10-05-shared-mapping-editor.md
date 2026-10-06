@@ -750,9 +750,16 @@ Add a short subsection under the mappings docs noting that both editors share `a
 - [ ] **Step 5: Commit**
 
 ```bash
-git add -A
+# Explicit paths, never `git add -A`: editor work leaves sed/backup artifacts
+# such as `src/main/mapping-editor.test.ts-E` lying untracked in the worktree,
+# and -A would commit them.
+git add README.md src/main/mapping-editor.test.ts
+git rm src/main/mappings-editor-link.test.ts src/main/configurator-link.test.ts
 git commit -m "Collapse the duplicated editor tests into one suite"
 ```
+
+Before committing, run `git status --short` and confirm nothing unexpected is
+staged.
 
 ---
 
