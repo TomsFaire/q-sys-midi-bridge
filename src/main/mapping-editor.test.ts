@@ -488,7 +488,7 @@ test('a loadEditorState resolving undefined still renders a usable table and rep
   assert.ok(ed.root.querySelector('table'), 'the table must exist, not just the toolbar')
   assert.ok(ed.root.querySelector('tbody'))
   assert.ok(statuses.some(s => s.kind === 'err'), 'an empty load must be reported')
-  assert.deepEqual(JSON.parse(JSON.stringify(ed.getMappings())), [])
+  assert.throws(() => ed.getMappings(), /failed to load/)
   await ed.save()
   assert.ok(statuses.some(s => s.kind === 'err' && /Not saved/.test(s.text)),
     'an empty load must not be saveable over stored mappings')
@@ -728,12 +728,13 @@ test('mappings page: Refresh Q-Sys calls refreshComponents and never reload', as
 const CONFIGURATOR_HTML = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'renderer', 'configurator.html'), 'utf-8')
 
 function runConfigurator(invoke: (ch: string, ...a: any[]) => any = async () => ({})) {
+  const ipcHandlers = new Map<string, (...a: any[]) => any>()
   return runPageScript(CONFIGURATOR_HTML, {
     require: (m: string) => {
       if (m !== 'electron') throw new Error('unexpected require ' + m)
-      return { ipcRenderer: { invoke, on() {}, send() {} }, clipboard: { writeText() {} } }
+      return { ipcRenderer: { invoke, on(ch: string, fn: any) { ipcHandlers.set(ch, fn) }, send() {} }, clipboard: { writeText() {} } }
     },
-  })
+  }).then(p => ({ ...p, ipcHandlers }))
 }
 
 test('configurator links the shared script and stylesheet by relative file:// path', () => {
@@ -807,4 +808,104 @@ test('configurator: #editor-root is a flex child that can shrink so the table sc
 test('shared stylesheet centres the Type column header like its body cells', () => {
   const css = fs.readFileSync(path.join(__dirname, '..', '..', 'assets', 'shared', 'mapping-editor.css'), 'utf-8')
   assert.match(css, /\.mapping-editor th:nth-child\(2\)\s*\{[^}]*text-align:\s*center/)
+})
+
+// ── Final whole-branch review fixes ─────────────────────────────────────────
+
+// Guessed Min/Max: driven through the real change listener, as a browser
+// fires it (input per keystroke, then change on commit).
+async function nameControl(ed: any, id: string, name: string, commit = true) {
+  const sel = rowOf(ed, id).querySelector('.comp-sel')
+  if (!ed.__internals.assignments.get(id)) {
+    sel.value = GAIN.name
+    await fireEvent(sel, 'change')
+  }
+  const row = rowOf(ed, id)
+  const input = row.querySelector('.ctrl-input')
+  input.value = name
+  await fireEvent(input, 'input')
+  if (commit) await fireEvent(input, 'change')
+  return row
+}
+
+for (const [name, min, max] of [
+  ['Mic.Gain', -100, 10], ['Filter.Frequency', 20, 20000], ['Comp.Threshold', -40, 0], ['Out.Delay', 0, 2000],
+] as const) {
+  test(`committing control name "${name}" stores and shows the guessed ${min}/${max}`, async () => {
+    const ed = await mountWith()
+    const row = await nameControl(ed, 'Ka1', name)
+    const a = ed.__internals.assignments.get('Ka1')
+    assert.equal(a.controlName, name)
+    assert.deepEqual([a.min, a.max], [min, max], 'must be saved, not only displayed')
+    assert.equal(row.querySelector('.min-inp').value, String(min))
+    assert.equal(row.querySelector('.max-inp').value, String(max))
+    assert.equal(rowOf(ed, 'Ka1'), row, 'guessing must not rebuild the row under the caret')
+    const out = JSON.parse(JSON.stringify(ed.getMappings()))
+    assert.deepEqual([out[0].qsys.min, out[0].qsys.max], [min, max])
+  })
+}
+
+test('typing a control name by hand does not guess until it is committed', async () => {
+  const ed = await mountWith()
+  await nameControl(ed, 'Ka1', 'f', false)       // one keystroke: "f" would hit nothing useful
+  const a = ed.__internals.assignments.get('Ka1')
+  assert.deepEqual([a.min, a.max], [-100, 10])
+  await nameControl(ed, 'Ka1', 'freq', false)
+  assert.deepEqual([ed.__internals.assignments.get('Ka1').min, ed.__internals.assignments.get('Ka1').max], [-100, 10])
+  await nameControl(ed, 'Ka1', 'freq')            // committed
+  assert.equal(ed.__internals.assignments.get('Ka1').min, 20)
+})
+
+test('a row whose control name is already set is not re-guessed when edited', async () => {
+  const ed = await mountWith(withMapping())     // loaded with control "gain", -100/10
+  await nameControl(ed, 'Ka1', 'frequency')
+  const a = ed.__internals.assignments.get('Ka1')
+  assert.equal(a.controlName, 'frequency')
+  assert.deepEqual([a.min, a.max], [-100, 10])
+})
+
+test('a name committed once is not re-guessed on a later edit of the same row', async () => {
+  const ed = await mountWith()
+  await nameControl(ed, 'Ka1', 'Mic.Gain')
+  await nameControl(ed, 'Ka1', 'Mic.Frequency')
+  const a = ed.__internals.assignments.get('Ka1')
+  assert.deepEqual([a.min, a.max], [-100, 10])
+})
+
+test('guessing leaves a toggle row alone', async () => {
+  const ed = await mountWith({ loadEditorState: async () => ({ physicalControls: [MUTE_1], mappings: [] }) })
+  await nameControl(ed, MUTE_1.id, 'Mic.Frequency')
+  const a = ed.__internals.assignments.get(MUTE_1.id)
+  assert.equal(a.controlName, 'Mic.Frequency')
+  assert.deepEqual([a.min, a.max], [-100, 10])
+})
+
+test('the Type cell carries td-type so both hosts centre it like the header', async () => {
+  const ed = await mountWith()
+  assert.ok(rowOf(ed, 'Ka1').children[1].classList.contains('td-type'))
+  const css = fs.readFileSync(path.join(__dirname, '..', '..', 'assets', 'shared', 'mapping-editor.css'), 'utf-8')
+  assert.match(css, /\.td-type\s*\{[^}]*text-align:\s*center/)
+  assert.doesNotMatch(CONFIGURATOR_HTML, /\.td-type/)
+})
+
+test('a throwing status probe skips discovery, so its error is not overwritten', async () => {
+  let discovered = 0
+  const statuses: any[] = []
+  await mountWith({
+    getQsysStatus: async () => { throw new Error('ipc down') },
+    discoverComponents: async () => { discovered++; throw new Error('second failure') },
+  }, statuses)
+  assert.equal(discovered, 0)
+  assert.deepEqual(statuses.filter(s => s.kind === 'err').map(s => s.text), ['Q-Sys status: ipc down'])
+})
+
+test('getMappings throws after a failed load instead of returning []', async () => {
+  const ed = await mountWith({ loadEditorState: async () => { throw new Error('boom') } })
+  assert.throws(() => ed.getMappings(), /failed to load/)
+})
+
+const SHARED_SRC = fs.readFileSync(path.join(__dirname, '..', '..', 'assets', 'shared', 'mapping-editor.js'), 'utf-8')
+test('the shared module stays a classic script', () => {
+  assert.doesNotMatch(SHARED_SRC, /^\s*(?:import|export)\b/m)
+  assert.doesNotMatch(SHARED_SRC, /\b(?:require|import)\s*\(/)
 })

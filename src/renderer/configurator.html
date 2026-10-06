@@ -71,7 +71,6 @@
 
     /* Shared-editor cells; widths live on the module's th rules. */
     table { table-layout: fixed; }
-    .td-type  { text-align: center; }
 
     /* body is a clipped flex column: the editor must be a shrinkable flex child
        so the table scrolls inside it and the footer stays visible. */
@@ -80,8 +79,6 @@
     .hidden { display: none; }
 
     /* Control input: text + datalist combo */
-    .ctrl-input-wrap { position: relative; }
-    .ctrl-input-wrap input[type=text] { padding-right: 20px; }
 
     /* ── Network panel ── */
     #network-panel {
@@ -405,14 +402,6 @@ document.getElementById('mappings-password-save-btn').addEventListener('click', 
 })
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
-function esc(str) {
-  return String(str)
-    .replace(/&/g, '&amp;')
-    .replace(/"/g, '&quot;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-}
 
 function setOverlay(msg) {
   document.getElementById('overlay').style.display = 'flex'

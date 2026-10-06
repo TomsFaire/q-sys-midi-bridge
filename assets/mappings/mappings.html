@@ -75,10 +75,6 @@
 <script>
 let editor = null
 
-function esc(str) {
-  return String(str).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
-}
-
 async function api(path, opts) {
   const res = await fetch(path, { credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, ...opts })
   if (res.status === 401) { showLogin(); throw new Error('Session expired — please sign in again') }

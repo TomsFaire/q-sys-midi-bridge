@@ -81,6 +81,11 @@
     const assignments = opts.assignments || new Map()
     // The caller may own the view so tab and filter state survive a rebuild.
     const view = opts.view || { group: 'all', text: '' }
+    // id -> the control name as it stood before the current typing session
+    // began. The input event stores every keystroke (so Save never misses an
+    // unblurred edit), so the change event needs this to tell a first fill
+    // from an edit of an existing name.
+    const committedCtrl = new Map()
 
     for (const mObj of opts.assignments ? [] : (opts.mappings || [])) {
       const pc = physicalControls.find(p =>
@@ -187,7 +192,7 @@
       if (a && a.link) tdLabel.appendChild(el('span', { className: 'leg', textContent: 'L' }))
       tdLabel.appendChild(el('span', { textContent: pc.label }))
 
-      const tdType = cell(row)
+      const tdType = cell(row, 'td-type')
       tdType.appendChild(el('span', { className: 'badge badge-' + pc.controlType, textContent: pc.controlType }))
 
       cell(row).appendChild(componentSelect('comp-sel', pc.id, '— unassigned —', a && a.component))
@@ -320,6 +325,7 @@
       if (!id) return
       if (t.classList.contains('comp-sel')) {
         const componentName = t.value
+        committedCtrl.delete(id)
         if (!componentName) { assignments.delete(id); renderRow(id); return }
         repointPrimary(assignments, id, componentName)
         await loadControls(componentName)
@@ -337,6 +343,26 @@
         assignments.set(id, { ...a, link: { ...a.link, component: t.value } })
         if (t.value) await loadControls(t.value)
         renderRow(id)
+      } else if (t.classList.contains('ctrl-input')) {
+        // Suggest a Min/Max when a control name is FIRST committed (blur,
+        // Enter or a datalist pick). Guarding on the committed value, not the
+        // live one, stops a hand-typed name guessing from its first letter;
+        // an already-named row keeps whatever range the user has.
+        const a = assignments.get(id)
+        const had = committedCtrl.has(id) ? committedCtrl.get(id) : (a && a.controlName) || ''
+        committedCtrl.delete(id)
+        const name = t.value.trim()
+        const pc = physicalControls.find(p => p.id === id)
+        if (!a || had || !name || !pc || pc.controlType === 'toggle') return
+        const [min, max] = guessRange(name)
+        assignments.set(id, { ...a, controlName: name, min, max })
+        // Set the boxes directly: re-rendering here would rebuild the row
+        // under the user's caret.
+        const row = root.querySelector('tr.ctrl-row[data-id="' + id + '"]')
+        if (row) {
+          row.querySelector('.min-inp').value = String(min)
+          row.querySelector('.max-inp').value = String(max)
+        }
       }
     })
 
@@ -349,6 +375,7 @@
         if (!a.link) return
         assignments.set(id, { ...a, link: { ...a.link, control: t.value.trim() } })
       } else if (t.classList.contains('ctrl-input')) {
+        if (!committedCtrl.has(id)) committedCtrl.set(id, a.controlName || '')
         assignments.set(id, { ...a, controlName: t.value.trim() })
       } else if (t.classList.contains('min-inp')) {
         assignments.set(id, { ...a, min: parseFloat(t.value) || 0 })
@@ -360,6 +387,7 @@
     tbody.addEventListener('click', e => {
       const btn = e.target.closest && e.target.closest('.clear-btn')
       if (!btn) return
+      committedCtrl.delete(btn.dataset.id)
       assignments.delete(btn.dataset.id)
       renderRow(btn.dataset.id)
     })
@@ -486,6 +514,9 @@
           else say('info', 'Q-Sys is not connected. Control names are free text until it is.')
         }
       } catch (e) {
+        // An unprobeable Core is not a connected one: skip discovery rather
+        // than let its failure message overwrite this one.
+        connected = false
         say('err', 'Q-Sys status: ' + messageOf(e))
       }
       if (!connected) return []
@@ -505,6 +536,7 @@
     }
 
     function getMappings() {
+      if (loadFailed) throw new Error('Mappings failed to load, so there is nothing safe to read. Reload first.')
       return buildMappings(physicalControls, editor.__internals.assignments)
     }
 

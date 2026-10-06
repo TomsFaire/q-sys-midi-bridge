@@ -70,6 +70,7 @@ tr.link-row td { border-bottom: 1px solid var(--border); }
 tr.link-row .td-label { padding-left: 22px; font-weight: 400; color: var(--text-dim); }
 
 .td-label { font-size: 12px; font-weight: 500; padding-left: 10px; white-space: nowrap; }
+.td-type { text-align: center; }
 .td-link { text-align: center; }
 .td-link input[type=checkbox] { width: auto; cursor: pointer; }
 .td-clear { text-align: center; }
