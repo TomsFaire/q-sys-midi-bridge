@@ -7,13 +7,22 @@
  */
 
 import { QrcClient } from './qrc-client.js'
-import { MidiIO } from './midi-io.js'
+import { MidiIO, PITCH_BEND_MAX } from './midi-io.js'
 import type { Config, Mapping, QsysRef } from './config.js'
 
 /** One resolved Q-SYS write target. */
 interface Target { component: string; control: string }
 
 const CHANGE_GROUP_ID = 'mutes'
+
+/**
+ * MCU fader touch notes: 104-111 are faders 1-8 and 112 is the master, so a
+ * touch note is its pitch bend channel plus 103. Buttons live far below this
+ * range, which is what keeps a mute release from reading as a fader release.
+ */
+const TOUCH_NOTE_BASE = 103
+const TOUCH_NOTE_MIN = 104
+const TOUCH_NOTE_MAX = 112
 
 const keyOf = (t: Target): string => `${t.component}:${t.control}`
 
@@ -45,6 +54,14 @@ export class MappingEngine {
   private toggleState = new Map<string, number>()
   // LED feedback: "component:control" → {channel, note}
   private ledMap = new Map<string, { channel: number; note: number }>()
+  // Motorised faders, by pitch bend channel and by target key
+  private pitchBendMap = new Map<number, Mapping>()
+  private faderFeedback = new Map<string, { midiChannel: number; min: number; max: number }>()
+  private faderKeyByChannel = new Map<number, string>()
+  // Faders with a hand on them — their motors hold still until released
+  private touchedFaders = new Set<string>()
+  // Last value the Core reported for a control, raw rather than 0/1
+  private controlValues = new Map<string, number>()
 
   private recentActivity: string[] = []
 
@@ -53,18 +70,7 @@ export class MappingEngine {
     this.midi = midi
     this.config = config
 
-    for (const mapping of config.mappings) {
-      const key = `${mapping.midi.channel}:${mapping.midi.number}`
-      if (mapping.midi.type === 'cc') {
-        this.ccMap.set(key, mapping)
-      } else {
-        this.noteMap.set(key, mapping)
-      }
-    }
-
-    for (const led of config.feedback.mute_leds) {
-      this.ledMap.set(`${led.component}:${led.control}`, led.midi)
-    }
+    this.buildIndexes(config)
 
     if (config.feedback.enabled) {
       this.qrc.on('notification', (_id: string, result: unknown) => this.handleNotification(result))
@@ -83,6 +89,11 @@ export class MappingEngine {
   }
 
   handleNoteOn(channel: number, note: number): void {
+    if (note >= TOUCH_NOTE_MIN && note <= TOUCH_NOTE_MAX) {
+      const key = this.faderKeyByChannel.get(note - TOUCH_NOTE_BASE)
+      // A touched fader holds its position until the hand comes off.
+      if (key) { this.touchedFaders.add(key); return }
+    }
     const mapping = this.noteMap.get(`${channel}:${note}`)
     if (!mapping) return
     this.execute(mapping, 127).catch((err) => {
@@ -90,8 +101,34 @@ export class MappingEngine {
     })
   }
 
+  /** A fader moved on the surface. */
+  handlePitchBend(channel: number, value14: number): void {
+    const mapping = this.pitchBendMap.get(channel)
+    if (!mapping) return
+    const q = mapping.qsys
+    const db = this.scaleFrom14Bit(value14, q.min ?? 0, q.max ?? 1)
+    const targets = resolveTargets(q)
+    this.setTargets(targets, db).catch((err) => {
+      console.error(`[Bridge] QRC error for "${mapping.label ?? 'fader'}": ${err.message}`)
+    })
+  }
+
+  /**
+   * A button or fader was released. Only the MCU touch range means a fader;
+   * every other note is a button release the bridge has no use for.
+   */
+  handleNoteOff(channel: number, note: number): void {
+    if (note < TOUCH_NOTE_MIN || note > TOUCH_NOTE_MAX) return
+    const key = this.faderKeyByChannel.get(note - TOUCH_NOTE_BASE)
+    if (!key) return
+    this.touchedFaders.delete(key)
+    // The Core may have moved under the operator's hand; catch the motor up.
+    const value = this.controlValues.get(key)
+    if (value !== undefined) this.driveFader(key, value)
+  }
+
   get mappingCount(): number {
-    return this.ccMap.size + this.noteMap.size
+    return this.ccMap.size + this.noteMap.size + this.pitchBendMap.size
   }
 
   /** Swap the underlying QRC client (e.g. after a host change). */
@@ -105,20 +142,49 @@ export class MappingEngine {
 
   /** Hot-reload mappings from a new config without restarting the app. */
   reload(config: Config): void {
+    this.toggleState.clear()
+    this.touchedFaders.clear()
+    this.controlValues.clear()
+    this.buildIndexes(config)
+    console.log(
+      `[Bridge] Mappings reloaded — ${this.ccMap.size} CC, ${this.noteMap.size} note, ` +
+      `${this.pitchBendMap.size} fader`,
+    )
+  }
+
+  /** (Re)build every lookup map from a config. */
+  private buildIndexes(config: Config): void {
     this.ccMap.clear()
     this.noteMap.clear()
-    this.toggleState.clear()
     this.ledMap.clear()
+    this.pitchBendMap.clear()
+    this.faderFeedback.clear()
+    this.faderKeyByChannel.clear()
 
     for (const mapping of config.mappings) {
+      if (mapping.midi.type === 'pitchbend') {
+        // A fader is addressed by MIDI channel alone.
+        this.pitchBendMap.set(mapping.midi.channel, mapping)
+        continue
+      }
       const key = `${mapping.midi.channel}:${mapping.midi.number}`
       if (mapping.midi.type === 'cc') this.ccMap.set(key, mapping)
       else this.noteMap.set(key, mapping)
     }
+
     for (const led of config.feedback.mute_leds) {
       this.ledMap.set(`${led.component}:${led.control}`, led.midi)
     }
-    console.log(`[Bridge] Mappings reloaded — ${this.ccMap.size} CC, ${this.noteMap.size} note`)
+
+    for (const fader of config.feedback.fader_positions ?? []) {
+      const key = `${fader.component}:${fader.control}`
+      this.faderFeedback.set(key, {
+        midiChannel: fader.midi.channel,
+        min: fader.min,
+        max: fader.max,
+      })
+      this.faderKeyByChannel.set(fader.midi.channel, key)
+    }
   }
 
   getRecentActivity(): string[] {
@@ -126,13 +192,21 @@ export class MappingEngine {
   }
 
   async setupChangeGroup(): Promise<void> {
-    if (!this.config.feedback.enabled || this.ledMap.size === 0) return
+    if (!this.config.feedback.enabled) return
+    if (this.ledMap.size === 0 && this.faderFeedback.size === 0) return
 
-    // Group controls by component for the ChangeGroup subscription
+    // Group controls by component for the ChangeGroup subscription. Faders
+    // ride in the same group as the mutes: the Core's change group budget is
+    // small, and a second group here would cost one the UCI needs.
     const byComponent = new Map<string, string[]>()
-    for (const led of this.config.feedback.mute_leds) {
-      if (!byComponent.has(led.component)) byComponent.set(led.component, [])
-      byComponent.get(led.component)!.push(led.control)
+    const subscribe = (component: string, control: string) => {
+      const controls = byComponent.get(component) ?? []
+      if (!controls.includes(control)) controls.push(control)
+      byComponent.set(component, controls)
+    }
+    for (const led of this.config.feedback.mute_leds) subscribe(led.component, led.control)
+    for (const fader of this.config.feedback.fader_positions ?? []) {
+      subscribe(fader.component, fader.control)
     }
 
     for (const [component, controls] of byComponent) {
@@ -187,8 +261,12 @@ export class MappingEngine {
 
     for (const change of r.Changes) {
       const key = `${change.Component}:${change.Name}`
+      this.controlValues.set(key, change.Value)
       const val = change.Value > 0 ? 1 : 0
       this.toggleState.set(key, val)
+
+      // A fader with a hand on it keeps its position; the release catches up.
+      if (!this.touchedFaders.has(key)) this.driveFader(key, change.Value)
 
       const led = this.ledMap.get(key)
       if (!led) continue
@@ -198,6 +276,13 @@ export class MappingEngine {
         this.midi.sendNoteOff(led.channel, led.note)
       }
     }
+  }
+
+  /** Move a motorised fader to the position a Q-SYS value implies. */
+  private driveFader(key: string, value: number): void {
+    const fader = this.faderFeedback.get(key)
+    if (!fader) return
+    this.midi.sendPitchBend(fader.midiChannel, this.scaleTo14Bit(value, fader.min, fader.max))
   }
 
   private async execute(mapping: Mapping, midiValue: number): Promise<void> {
@@ -280,6 +365,19 @@ export class MappingEngine {
         }),
       ),
     )
+  }
+
+  /** A Q-SYS value to a 14-bit fader position. */
+  private scaleTo14Bit(value: number, min: number, max: number): number {
+    if (max === min) return 0
+    const ratio = (value - min) / (max - min)
+    return Math.round(Math.max(0, Math.min(1, ratio)) * PITCH_BEND_MAX)
+  }
+
+  /** A 14-bit fader position to a Q-SYS value. */
+  private scaleFrom14Bit(value14: number, min: number, max: number): number {
+    const ratio = Math.max(0, Math.min(1, value14 / PITCH_BEND_MAX))
+    return min + ratio * (max - min)
   }
 
   private scale(value: number, min: number, max: number): number {

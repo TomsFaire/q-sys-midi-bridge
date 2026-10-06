@@ -46,6 +46,12 @@ export class Bridge extends EventEmitter {
     this.midi.on('note_on', (channel: number, note: number) => {
       this.engine.handleNoteOn(channel, note)
     })
+    this.midi.on('note_off', (channel: number, note: number) => {
+      this.engine.handleNoteOff(channel, note)
+    })
+    this.midi.on('pitchbend', (channel: number, value: number) => {
+      this.engine.handlePitchBend(channel, value)
+    })
   }
 
   async start(): Promise<void> {
