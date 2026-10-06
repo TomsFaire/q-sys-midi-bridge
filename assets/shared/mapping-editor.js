@@ -76,11 +76,13 @@
     const getControls = opts.getControls || null
     const ctrlCache = new Map()
     const pendingControls = new Map()
-    const assignments = new Map()
+    // A caller rebuilding the editor (refreshComponents) hands its live map
+    // back in so unsaved edits survive; otherwise seed from opts.mappings.
+    const assignments = opts.assignments || new Map()
     // The caller may own the view so tab and filter state survive a rebuild.
     const view = opts.view || { group: 'all', text: '' }
 
-    for (const mObj of opts.mappings || []) {
+    for (const mObj of opts.assignments ? [] : (opts.mappings || [])) {
       const pc = physicalControls.find(p =>
         p.midi.type === mObj.midi.type && p.midi.channel === mObj.midi.channel && p.midi.number === mObj.midi.number)
       if (!pc) continue
@@ -446,39 +448,60 @@
         say('err', 'Could not load mappings: ' + messageOf(e))
       }
 
-      let connected = true
-      try {
-        const st = await adapter.getQsysStatus()
-        connected = !!(st && st.connected)
-        if (!connected) say('info', 'Q-Sys is not connected. Control names are free text until it is.')
-      } catch (e) {
-        say('err', 'Q-Sys status: ' + messageOf(e))
-      }
-
-      let components = []
-      if (connected) {
-        try {
-          components = await adapter.discoverComponents() || []
-        } catch (e) {
-          say('err', 'Q-Sys: ' + messageOf(e))
-        }
-      }
+      const components = await discover()
 
       physicalControls = state.physicalControls || []
       buildTabs()
       filter.value = view.text
+      install({ mappings: state.mappings || [] }, components)
+    }
+
+    // Builds an editor and swaps it in. extra carries either mappings (fresh
+    // load) or assignments (keep the user's unsaved edits).
+    function install(extra, components) {
       const fresh = createEditor({
         physicalControls,
-        mappings: state.mappings || [],
         components,
         view,
         getControls: name => Promise.resolve(adapter.getComponentControls(name)).then(naturalSort),
+        ...extra,
       })
       if (editor) editor.root.replaceWith(fresh.root)
       else host.appendChild(fresh.root)
       editor = fresh
       handle.root = host
       handle.__internals = fresh.__internals
+    }
+
+    // Asks the Core for its components. Failures are reported and yield [].
+    // A failing status probe carries the Core's own message, shown as an error:
+    // with Access Control on, a logon failure is the usual reason for no components.
+    async function discover() {
+      let connected = true
+      try {
+        const st = await adapter.getQsysStatus()
+        connected = !!(st && st.connected)
+        if (!connected) {
+          if (st && st.message) say('err', 'Q-Sys: ' + st.message)
+          else say('info', 'Q-Sys is not connected. Control names are free text until it is.')
+        }
+      } catch (e) {
+        say('err', 'Q-Sys status: ' + messageOf(e))
+      }
+      if (!connected) return []
+      try {
+        return (await adapter.discoverComponents()) || []
+      } catch (e) {
+        say('err', 'Q-Sys: ' + messageOf(e))
+        return []
+      }
+    }
+
+    // Re-asks the Core for components and re-renders, keeping every unsaved
+    // edit. Falls back to a full load if nothing has loaded yet.
+    async function refreshComponents() {
+      if (!editor || loadFailed) return load()
+      install({ assignments: editor.__internals.assignments }, await discover())
     }
 
     function getMappings() {
@@ -510,6 +533,7 @@
       save: () => send('save', 'Saving…', 'Saved'),
       saveAndApply: () => send('saveAndApply', 'Applying…', 'Applied'),
       reload: load,
+      refreshComponents,
     }
 
     host.textContent = ''

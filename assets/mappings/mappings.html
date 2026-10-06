@@ -147,7 +147,7 @@ async function loadApp() {
   })
 }
 
-document.getElementById('refresh-btn').addEventListener('click', () => { if (editor) editor.reload() })
+document.getElementById('refresh-btn').addEventListener('click', () => { if (editor) editor.refreshComponents() })
 document.getElementById('save-btn').addEventListener('click', () => { if (editor) editor.save() })
 document.getElementById('save-apply-btn').addEventListener('click', () => { if (editor) editor.saveAndApply() })
 

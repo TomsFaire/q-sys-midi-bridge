@@ -10,6 +10,9 @@ import assert from 'node:assert/strict'
 import { loadSharedEditor, makeDomElement, fireEvent } from './helpers/load-shared-editor.js'
 import { GOLDEN_FIXTURES, KNOB_A1, MUTE_1 } from './helpers/golden-fixtures.js'
 import { validateMappings } from './mapping-service.js'
+import fs from 'node:fs'
+import path from 'node:path'
+import vm from 'node:vm'
 
 test('buildMappings reproduces every golden fixture', () => {
   assert.equal(GOLDEN_FIXTURES.length, 9)
@@ -521,6 +524,14 @@ test('everything the editor emits for a gang passes server validation', () => {
   const { buildMappings } = loadSharedEditor().__internals
   const ganged = GOLDEN_FIXTURES.filter(f => f.expected && f.expected.qsys.link)
   assert.ok(ganged.length >= 3, 'expected component-only, control-only, both-differ and toggle gangs')
+  // A ticked-but-unfilled link must be dropped, not sent: a broken link would
+  // fail server validation and lose the whole save.
+  const unfilled = GOLDEN_FIXTURES.find(f => f.name === 'link ticked but unfilled')!
+  assert.ok(unfilled.assignment.link, 'fixture must actually carry a link')
+  const unfilledOut = JSON.parse(JSON.stringify(buildMappings([unfilled.pc], new Map([[unfilled.pc.id, unfilled.assignment]]))))
+  assert.equal(unfilledOut.length, 1)
+  assert.equal(unfilledOut[0].qsys.link, undefined)
+  assert.equal(validateMappings(unfilledOut).valid, true)
   for (const f of ganged) {
     const out = JSON.parse(JSON.stringify(buildMappings([f.pc], new Map([[f.pc.id, f.assignment]]))))
     assert.ok(out[0].qsys.link, f.name)
@@ -557,4 +568,103 @@ test('an unlinked mapping gains no link by passing through the editor', async ()
     qsys: { type: 'component_control', component: 'Mic.02.Gain', control: 'gain', min: -100, max: 20 },
   }]
   assert.deepEqual(await roundTrip(KNOB_A1, saved), saved)
+})
+
+// ---- Task 6 fix round: refresh, Q-Sys message, page glue ------------------
+
+test('refreshComponents keeps unsaved edits and picks up the new component list', async () => {
+  let comps = [GAIN]
+  const ed = await mountWith({ discoverComponents: async () => comps })
+  const sel = rowOf(ed, 'Ka1').querySelector('.comp-sel')
+  sel.value = GAIN.name
+  await fireEvent(sel, 'change')
+  const input = rowOf(ed, 'Ka1').querySelector('.ctrl-input')
+  input.value = 'gain'
+  await fireEvent(input, 'input')
+  comps = [GAIN, GAIN3]
+  await ed.refreshComponents()
+  const opts = [...rowOf(ed, 'Ka1').querySelector('.comp-sel').children].map((o: any) => o.value)
+  assert.ok(opts.includes(GAIN3.name), 'new component must be offered')
+  const out = JSON.parse(JSON.stringify(ed.getMappings()))
+  assert.equal(out.length, 1, 'the unsaved assignment must survive')
+  assert.equal(out[0].qsys.component, GAIN.name)
+  assert.equal(out[0].qsys.control, 'gain')
+})
+
+test('refreshComponents does not re-read the stored mappings', async () => {
+  let loads = 0
+  const ed = await mountWith({ loadEditorState: async () => { loads++; return { physicalControls: [KNOB_A1], mappings: [] } } })
+  await ed.refreshComponents()
+  assert.equal(loads, 1)
+})
+
+test('a disconnected status carrying a message is shown as an error with that message', async () => {
+  const statuses: any[] = []
+  await mountWith({ getQsysStatus: async () => ({ connected: false, message: 'Logon failed: bad credentials' }) }, statuses)
+  assert.ok(statuses.some(s => s.kind === 'err' && /Logon failed: bad credentials/.test(s.text)))
+  assert.ok(!statuses.some(s => s.kind === 'info'))
+})
+
+const PAGE_HTML = fs.readFileSync(path.join(__dirname, '..', '..', 'assets', 'mappings', 'mappings.html'), 'utf-8')
+
+test('the page links the shared script and stylesheet at the paths the server serves', () => {
+  assert.match(PAGE_HTML, /<script src="\/shared\/mapping-editor\.js"><\/script>/)
+  assert.match(PAGE_HTML, /<link rel="stylesheet" href="\/shared\/mapping-editor\.css">/)
+  // The module must load before the inline script that calls it.
+  assert.ok(PAGE_HTML.indexOf('/shared/mapping-editor.js') < PAGE_HTML.indexOf('MappingEditor.mount'))
+})
+
+test('the page offers an empty #editor-root and no leftover static table or toolbar', () => {
+  assert.match(PAGE_HTML, /<div id="editor-root"><\/div>/)
+  assert.doesNotMatch(PAGE_HTML, /<thead/)
+  assert.doesNotMatch(PAGE_HTML, /id="tbody"/)
+  assert.doesNotMatch(PAGE_HTML, /class="tabs"|class="filterbar"|id="filter-input"/)
+})
+
+function loadPageAdapter(failComponents = false): { adapter: any; calls: any[] } {
+  const blocks = [...PAGE_HTML.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(m => m[1])
+  assert.equal(blocks.length, 1)
+  const calls: any[] = []
+  const stub = (): any => ({ addEventListener: () => {}, classList: { add() {}, remove() {} }, style: {}, textContent: '', value: '' })
+  const sandbox: any = {
+    document: { getElementById: stub },
+    console,
+    fetch: async (url: string, opts: any = {}) => {
+      calls.push({ url, method: opts.method ?? 'GET', body: opts.body })
+      if (failComponents && url === '/api/qsys/components') {
+        return { ok: false, status: 502, json: async () => ({ error: 'Logon failed' }) }
+      }
+      return { ok: true, status: 200, json: async () => ({ components: [{ name: 'A' }], controls: [{ name: 'c' }] }) }
+    },
+    MappingEditor: { mount: async () => ({}) },
+  }
+  vm.createContext(sandbox)
+  vm.runInContext(blocks[0] + '\nglobalThis.__adapter = adapter', sandbox)
+  calls.length = 0   // drop the page's own startup session probe
+  return { adapter: sandbox.__adapter, calls }
+}
+
+test('the page adapter hits the expected endpoint, method and body for every method', async () => {
+  const { adapter, calls } = loadPageAdapter()
+  const m = [{ label: 'x' }]
+  await adapter.loadEditorState()
+  assert.equal(JSON.stringify(await adapter.getQsysStatus()), '{"connected":true}')
+  assert.deepEqual(JSON.parse(JSON.stringify(await adapter.discoverComponents())), [{ name: 'A' }])
+  assert.deepEqual(JSON.parse(JSON.stringify(await adapter.getComponentControls('Mic 1/Gain'))), [{ name: 'c' }])
+  await adapter.save(m)
+  await adapter.saveAndApply(m)
+  assert.deepEqual(calls, [
+    { url: '/api/mappings', method: 'GET', body: undefined },
+    { url: '/api/qsys/components', method: 'GET', body: undefined },
+    { url: '/api/qsys/components', method: 'GET', body: undefined },
+    { url: '/api/qsys/components/Mic%201%2FGain/controls', method: 'GET', body: undefined },
+    { url: '/api/mappings', method: 'POST', body: JSON.stringify(m) },
+    { url: '/api/mappings/apply', method: 'POST', body: JSON.stringify(m) },
+  ])
+})
+
+test('the page adapter turns a failing components probe into disconnected plus the server message', async () => {
+  const { adapter } = loadPageAdapter(true)
+  const st = JSON.parse(JSON.stringify(await adapter.getQsysStatus()))
+  assert.deepEqual(st, { connected: false, message: 'Logon failed' })
 })

@@ -1,9 +1,10 @@
 /**
  * Golden fixtures for both mapping editors.
  *
- * Freezes what the web page (assets/mappings/mappings.html) and the desktop
- * Configurator (src/renderer/configurator.html) emit today from buildMappings(),
- * so the shared-editor refactor can prove it changed nothing. The fixtures live
+ * Freezes what the two mapping editors emit from buildMappings(), so the
+ * shared-editor refactor can prove it changed nothing. The web side drives the
+ * shared module (assets/shared/mapping-editor.js) through mount(); the desktop
+ * side still extracts and runs the script in src/renderer/configurator.html. The fixtures live
  * in helpers/golden-fixtures.ts (not here) so other tests can import them
  * without re-registering this file's tests.
  */
