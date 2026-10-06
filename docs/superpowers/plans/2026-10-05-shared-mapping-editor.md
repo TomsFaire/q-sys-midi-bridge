@@ -643,6 +643,27 @@ Wire the two footer buttons to `editor.save()` and `editor.saveAndApply()`.
 Run: `npm test 2>&1 | tail -8`
 Expected: PASS, Task 1's golden fixtures included.
 
+- [ ] **Step 5a: Verify in real Chromium what the test stub cannot**
+
+The vm DOM stub does not emulate `option.selected` ordering or `datalist`
+parsing, so three things are unproven until a real browser renders the page.
+This is the first task that produces one.
+
+Run `npm run build && npx electron .`, open `http://localhost:3001/mappings`,
+and confirm:
+
+1. A mapping whose component is **not** in the Core's component list shows that
+   stored name selected, with the `(not on Core)` suffix — not a blank row.
+   Easiest check: stop the Core connection, or temporarily point a row at a
+   name you know Designer does not have, then reload.
+2. The control-name `datalist` drops down with real suggestions after a
+   component is picked.
+3. Typing in a control field does not lose focus between keystrokes — this is
+   what `renderRow` was built for, and a regression here is invisible to tests.
+
+A blank row in case 1 means the fallback option's `selected` flag is not being
+honoured, and saving would silently delete that mapping.
+
 - [ ] **Step 6: Commit**
 
 ```bash
