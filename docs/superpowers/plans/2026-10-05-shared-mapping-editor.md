@@ -17,7 +17,7 @@
 - **Shared files live under `assets/shared/`.** `package.json` already packages `assets/**/*` and `src/renderer/**/*`; do not change the `files` array.
 - **The Network panel is out of scope.** Host, UCI enable/port, mappings password and restart stay inline in `src/renderer/configurator.html`.
 - **Tests run via `npm test`**, which is `tsc` then `node --test dist/main/**/*.test.js`. Test files are TypeScript under `src/main/` and compile to `dist/main/`.
-- **Baseline before starting: 83 tests passing.** Any task that reduces that count without deleting a named obsolete test is wrong.
+- **Baseline before starting: 92 tests passing** (as of `main` at v0.2.11). Any task that reduces that count without deleting a named obsolete test is wrong.
 
 ## Review Focus
 
