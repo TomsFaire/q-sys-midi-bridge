@@ -11,6 +11,61 @@ import midi from '@julusian/midi'
 
 const POLL_INTERVAL_MS = 2000
 
+/** Top of the 14-bit pitch bend range the MCU protocol uses for faders. */
+export const PITCH_BEND_MAX = 16383
+
+/** A MIDI message the bridge acts on, or null for one it ignores. */
+export type MidiEvent =
+  | { type: 'cc'; channel: number; cc: number; value: number }
+  | { type: 'note_on'; channel: number; note: number }
+  | { type: 'note_off'; channel: number; note: number }
+  | { type: 'pitchbend'; channel: number; value: number }
+  | null
+
+/**
+ * Decode one raw MIDI message.
+ *
+ * Two surfaces disagree about how a release is spelled: the MIDImix sends
+ * Note On velocity 0, the X-Touch sends a real Note Off (0x80). Both mean the
+ * same thing, so both decode to note_off and a press stays a press.
+ */
+export function parseMidiMessage(msg: number[]): MidiEvent {
+  if (msg.length < 2) return null
+  const status = msg[0]
+  const type = status & 0xf0
+  const channel = (status & 0x0f) + 1  // convert to 1-indexed
+
+  if (type === 0xb0) {
+    return { type: 'cc', channel, cc: msg[1], value: msg[2] ?? 0 }
+  }
+  if (type === 0x90) {
+    const velocity = msg[2] ?? 0
+    return velocity > 0
+      ? { type: 'note_on', channel, note: msg[1] }
+      : { type: 'note_off', channel, note: msg[1] }
+  }
+  if (type === 0x80) {
+    return { type: 'note_off', channel, note: msg[1] }
+  }
+  if (type === 0xe0) {
+    // 14-bit, LSB first.
+    const lsb = msg[1]
+    const msb = msg[2] ?? 0
+    return { type: 'pitchbend', channel, value: (msb << 7) | lsb }
+  }
+  return null
+}
+
+/**
+ * Build a pitch bend message for a motorised fader. The value is clamped: a
+ * dB reading outside the configured range must park the fader at an end of
+ * its travel, never wrap it to the other end.
+ */
+export function encodePitchBend(channel: number, value14: number): number[] {
+  const clamped = Math.max(0, Math.min(PITCH_BEND_MAX, Math.round(value14)))
+  return [0xe0 | (channel - 1), clamped & 0x7f, (clamped >> 7) & 0x7f]
+}
+
 export class MidiIO extends EventEmitter {
   private deviceName: string
   private input: midi.Input | null = null
@@ -46,6 +101,12 @@ export class MidiIO extends EventEmitter {
     }
     console.log(`[MIDI LED] NoteOn ch=${channel} note=${note} vel=${velocity}`)
     this.output.sendMessage([0x90 | (channel - 1), note, velocity])
+  }
+
+  /** Drive a motorised fader to a 14-bit position. */
+  sendPitchBend(channel: number, value14: number): void {
+    if (!this.output) return
+    this.output.sendMessage(encodePitchBend(channel, value14))
   }
 
   sendNoteOff(channel: number, note: number): void {
@@ -136,28 +197,29 @@ export class MidiIO extends EventEmitter {
   }
 
   private handleMessage(msg: number[]): void {
-    if (msg.length < 2) return
-    const status = msg[0]
-    const type = status & 0xf0
-    const channel = (status & 0x0f) + 1  // convert to 1-indexed
+    const event = parseMidiMessage(msg)
+    if (!event) {
+      console.log(`[MIDI RAW] OTHER status=0x${(msg[0] ?? 0).toString(16)} data=${msg.slice(1).join(',')}`)
+      return
+    }
 
-    if (type === 0xb0) {
-      // CC
-      const cc = msg[1]
-      const value = msg[2] ?? 0
-      console.log(`[MIDI RAW] CC  ch=${channel} cc=${cc} val=${value}`)
-      this.emit('cc', channel, cc, value)
-    } else if (type === 0x90) {
-      // Note On
-      const note = msg[1]
-      const velocity = msg[2] ?? 0
-      console.log(`[MIDI RAW] NOTE ch=${channel} note=${note} vel=${velocity}`)
-      if (velocity > 0) {
-        this.emit('note_on', channel, note)
-      }
-      // velocity=0 is a note-off — ignore for our purposes
-    } else {
-      console.log(`[MIDI RAW] OTHER status=0x${status.toString(16)} data=${msg.slice(1).join(',')}`)
+    switch (event.type) {
+      case 'cc':
+        console.log(`[MIDI RAW] CC  ch=${event.channel} cc=${event.cc} val=${event.value}`)
+        this.emit('cc', event.channel, event.cc, event.value)
+        break
+      case 'note_on':
+        console.log(`[MIDI RAW] NOTE ch=${event.channel} note=${event.note} press`)
+        this.emit('note_on', event.channel, event.note)
+        break
+      case 'note_off':
+        console.log(`[MIDI RAW] NOTE ch=${event.channel} note=${event.note} release`)
+        this.emit('note_off', event.channel, event.note)
+        break
+      case 'pitchbend':
+        // A moving fader floods this at touch rate, so it is not logged.
+        this.emit('pitchbend', event.channel, event.value)
+        break
     }
   }
 }
