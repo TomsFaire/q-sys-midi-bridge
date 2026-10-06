@@ -160,7 +160,9 @@ export function validateMappings(
     return { valid: false, errors: [{ index: -1, reason: 'mappings must be an array' }] }
   }
   const errors: MappingValidationError[] = []
-  const validTypes = new Set(['component_control', 'toggle', 'named_control', 'snapshot'])
+  const validTypes = new Set([
+    'component_control', 'component_control_relative', 'toggle', 'named_control', 'snapshot',
+  ])
   // A gang needs a component to inherit, so named_control and snapshot can't
   // carry one. Rejecting rather than ignoring keeps a typo from silently
   // moving only one leg of a pair.
@@ -169,13 +171,24 @@ export function validateMappings(
     const e = entry as Record<string, unknown>
     const midi = e?.midi as Record<string, unknown> | undefined
     const qsys = e?.qsys as Record<string, unknown> | undefined
-    if (!midi || (midi.type !== 'cc' && midi.type !== 'note_on')) {
-      errors.push({ index, reason: 'midi.type must be "cc" or "note_on"' })
+    if (!midi || (midi.type !== 'cc' && midi.type !== 'note_on' && midi.type !== 'pitchbend')) {
+      errors.push({ index, reason: 'midi.type must be "cc", "note_on" or "pitchbend"' })
+    } else if (midi.type === 'pitchbend') {
+      // An MCU fader is addressed by channel alone — there is no note number.
+      if (typeof midi.channel !== 'number') {
+        errors.push({ index, reason: 'midi.channel must be a number' })
+      }
     } else if (typeof midi.channel !== 'number' || typeof midi.number !== 'number') {
       errors.push({ index, reason: 'midi.channel and midi.number must be numbers' })
     }
     if (!qsys || typeof qsys.type !== 'string' || !validTypes.has(qsys.type as string)) {
       errors.push({ index, reason: `qsys.type must be one of ${[...validTypes].join(', ')}` })
+    }
+    if (qsys?.type === 'component_control_relative' && qsys.step !== undefined) {
+      const step = qsys.step
+      if (typeof step !== 'number' || !Number.isFinite(step) || step <= 0) {
+        errors.push({ index, reason: 'qsys.step must be a positive number' })
+      }
     }
     if (qsys?.link !== undefined) {
       const link = qsys.link

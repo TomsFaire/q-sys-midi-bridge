@@ -93,3 +93,47 @@ test('validateMappings rejects a link on a named_control mapping', () => {
   ])
   assert.equal(result.valid, false)
 })
+
+// ── X-Touch: pitch-bend faders and relative encoders ─────────────────────────
+
+test('validateMappings accepts a pitchbend mapping, which carries no note number', () => {
+  const result = validateMappings([
+    { midi: { type: 'pitchbend', channel: 1 },
+      qsys: { type: 'component_control', component: 'Mic.01.Gain', control: 'gain', min: -100, max: 20 } },
+  ])
+  assert.equal(result.valid, true)
+})
+
+test('validateMappings rejects a pitchbend mapping with no channel', () => {
+  const result = validateMappings([
+    { midi: { type: 'pitchbend' },
+      qsys: { type: 'component_control', component: 'Mic.01.Gain', control: 'gain' } },
+  ])
+  assert.equal(result.valid, false)
+})
+
+test('validateMappings accepts a relative encoder mapping with a step', () => {
+  const result = validateMappings([
+    { midi: { type: 'cc', channel: 1, number: 16 },
+      qsys: { type: 'component_control_relative', component: 'Mic.01.Gain', control: 'gain', step: 0.5, min: -18, max: 18 } },
+  ])
+  assert.equal(result.valid, true)
+})
+
+test('validateMappings rejects a relative mapping whose step is not a positive number', () => {
+  const result = validateMappings([
+    { midi: { type: 'cc', channel: 1, number: 16 },
+      qsys: { type: 'component_control_relative', component: 'A.Gain', control: 'gain', step: 0 } },
+  ])
+  assert.equal(result.valid, false)
+  // Rejected for the step, not because the type is unrecognised.
+  if (!result.valid) assert.match(result.errors[0].reason, /step/)
+})
+
+test('validateMappings still rejects a cc mapping with no number', () => {
+  // Only pitchbend is exempt — a CC without a number is still malformed.
+  const result = validateMappings([
+    { midi: { type: 'cc', channel: 1 }, qsys: { type: 'toggle', component: 'X', control: 'y' } },
+  ])
+  assert.equal(result.valid, false)
+})

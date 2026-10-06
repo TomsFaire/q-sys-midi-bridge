@@ -63,14 +63,15 @@ test('each MIDImix strip column drives one Q-SYS channel', () => {
 
   for (const m of seedMappings()) {
     const comp = m.qsys.component
-    if (m.midi.type !== 'cc' || !comp) continue
-    if (m.midi.number < 22 || m.midi.number > 29) continue
+    const cc = m.midi.number
+    if (m.midi.type !== 'cc' || !comp || cc === undefined) continue
+    if (cc < 22 || cc > 29) continue
     if (comp.startsWith('Analog.Inputs')) continue
 
-    const col = byColumn.get(m.midi.number) ?? new Map<string, string[]>()
+    const col = byColumn.get(cc) ?? new Map<string, string[]>()
     const chan = channelOf(comp)
     col.set(chan, (col.get(chan) ?? []).concat(m.label ?? comp))
-    byColumn.set(m.midi.number, col)
+    byColumn.set(cc, col)
   }
 
   for (const [cc, channels] of [...byColumn].sort((a, b) => a[0] - b[0])) {
