@@ -150,6 +150,7 @@ async function roundTripWeb(pc: Any, mappings: Any[]): Promise<Any[]> {
 }
 
 test('web and desktop editors agree on every golden fixture', () => {
+  assert.equal(GOLDEN_FIXTURES.length, 9, 'golden fixtures must not be emptied or silently shrunk')
   for (const f of GOLDEN_FIXTURES) {
     const web = buildViaWeb(f.pc, f.assignment)
     const desktop = buildViaDesktop(f.pc, f.assignment)
@@ -158,6 +159,7 @@ test('web and desktop editors agree on every golden fixture', () => {
 })
 
 test('each fixture matches its frozen expected output (web)', () => {
+  assert.equal(GOLDEN_FIXTURES.length, 9, 'golden fixtures must not be emptied or silently shrunk')
   for (const f of GOLDEN_FIXTURES) {
     if (!f.expected) { assert.deepEqual(buildViaWeb(f.pc, f.assignment), [], f.name); continue }
     assert.deepEqual(buildViaWeb(f.pc, f.assignment), [f.expected], f.name)
@@ -165,6 +167,7 @@ test('each fixture matches its frozen expected output (web)', () => {
 })
 
 test('each fixture matches its frozen expected output (desktop)', () => {
+  assert.equal(GOLDEN_FIXTURES.length, 9, 'golden fixtures must not be emptied or silently shrunk')
   for (const f of GOLDEN_FIXTURES) {
     if (!f.expected) { assert.deepEqual(buildViaDesktop(f.pc, f.assignment), [], f.name); continue }
     assert.deepEqual(buildViaDesktop(f.pc, f.assignment), [f.expected], f.name)
@@ -175,14 +178,14 @@ test('TODAY: a mapping with no matching physical control is dropped on save', as
   const saved = [{ label: 'Ghost', midi: { type: 'cc', channel: 9, number: 99 },
                    qsys: { type: 'component_control', component: 'X.Gain', control: 'gain' } }]
   const out = await roundTripWeb(KNOB_A1, saved)
-  assert.deepEqual(out, [], 'documents the data-loss a later task fixes')
+  assert.deepEqual(out, [], 'INTENTIONAL: pins current buggy behaviour; expected to change when the data-loss fix lands - flip this test, do not "fix" it.')
 })
 
 test('TODAY: a snapshot mapping is dropped on save', async () => {
   const saved = [{ label: 'Snap', midi: { type: 'note_on', channel: 1, number: 25 },
                    qsys: { type: 'snapshot', bank: 1, slot: 3 } }]
   const out = await roundTripWeb(BANKL, saved)
-  assert.deepEqual(out, [], 'documents the data-loss a later task fixes')
+  assert.deepEqual(out, [], 'INTENTIONAL: pins current buggy behaviour; expected to change when the data-loss fix lands - flip this test, do not "fix" it.')
 })
 
 test('TODAY: two mappings on one MIDI address collapse to the last', async () => {
@@ -190,6 +193,6 @@ test('TODAY: two mappings on one MIDI address collapse to the last', async () =>
               qsys: { type: 'component_control', component: 'A.Gain', control: 'gain', min: -100, max: 10 } }
   const b = { ...a, label: 'Second', qsys: { ...a.qsys, component: 'B.Gain' } }
   const out = await roundTripWeb(KNOB_A1, [a, b])
-  assert.equal(out.length, 1, 'documents the data-loss a later task fixes')
+  assert.equal(out.length, 1, 'INTENTIONAL: pins current buggy behaviour; expected to change when the data-loss fix lands - flip this test, do not "fix" it.')
   assert.equal(out[0].qsys.component, 'B.Gain')
 })
