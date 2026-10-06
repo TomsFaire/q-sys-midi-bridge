@@ -217,3 +217,116 @@ test('setupChangeGroup subscribes the fader controls, not just the mutes', async
   })
   assert.deepEqual(asked, ['Mic.02.Gain:gain'])
 })
+
+// ── X-Touch: relative encoders (V-Pots) ──────────────────────────────────────
+
+/** One V-Pot on CC 16, trimming a gain between -18 and +18 dB in 0.5 dB steps. */
+function encoderConfig(encoding?: 'mcu' | 'signed'): Config {
+  return {
+    qsys: { host: '127.0.0.1', port: 1710 },
+    midi: { deviceName: 'X-Touch' },
+    mappings: [
+      {
+        label: 'Trim 1',
+        midi: { type: 'cc', channel: 1, number: 16 },
+        qsys: {
+          type: 'component_control_relative',
+          component: 'Mic.01.Gain', control: 'gain',
+          step: 0.5, min: -18, max: 18,
+          ...(encoding ? { encoding } : {}),
+        },
+      },
+    ],
+    feedback: { enabled: true, mute_leds: [] },
+  }
+}
+
+/** Tell the engine what the Core currently holds, the way AutoPoll would. */
+const pushTrim = (qrc: FakeQrc, value: number) =>
+  qrc.emit('notification', 'mutes', {
+    Id: 'mutes',
+    Changes: [{ Component: 'Mic.01.Gain', Name: 'gain', Value: value }],
+  })
+
+const written = (qrc: FakeQrc) =>
+  qrc.calls
+    .filter((c) => c.method === 'Component.Set')
+    .map((c) => (c.params as { Controls: Array<{ Value: number }> }).Controls[0].Value)
+
+test('an encoder tick clockwise raises the value by one step', async () => {
+  const { qrc, engine } = build(encoderConfig())
+  pushTrim(qrc, 0)
+  engine.handleCC(1, 16, 1)          // MCU: 0x01 = one tick clockwise
+  await new Promise((r) => setImmediate(r))
+  assert.deepEqual(written(qrc), [0.5])
+})
+
+test('an encoder tick anticlockwise lowers the value by one step', async () => {
+  const { qrc, engine } = build(encoderConfig())
+  pushTrim(qrc, 0)
+  engine.handleCC(1, 16, 0x41)       // MCU: 0x41 = one tick anticlockwise
+  await new Promise((r) => setImmediate(r))
+  assert.deepEqual(written(qrc), [-0.5])
+})
+
+test('a fast turn moves by as many steps as it reports', async () => {
+  const { qrc, engine } = build(encoderConfig())
+  pushTrim(qrc, 0)
+  engine.handleCC(1, 16, 3)          // three ticks clockwise
+  await new Promise((r) => setImmediate(r))
+  assert.deepEqual(written(qrc), [1.5])
+})
+
+test('an encoder will not drive the value past its maximum', async () => {
+  const { qrc, engine } = build(encoderConfig())
+  pushTrim(qrc, 17.8)
+  engine.handleCC(1, 16, 3)          // would reach 19.3
+  await new Promise((r) => setImmediate(r))
+  assert.deepEqual(written(qrc), [18])
+})
+
+test('an encoder will not drive the value past its minimum', async () => {
+  const { qrc, engine } = build(encoderConfig())
+  pushTrim(qrc, -17.8)
+  engine.handleCC(1, 16, 0x43)       // three ticks anticlockwise
+  await new Promise((r) => setImmediate(r))
+  assert.deepEqual(written(qrc), [-18])
+})
+
+test('successive ticks accumulate from the value the Core reported', async () => {
+  const { qrc, engine } = build(encoderConfig())
+  pushTrim(qrc, 0)
+  engine.handleCC(1, 16, 1)
+  await new Promise((r) => setImmediate(r))
+  engine.handleCC(1, 16, 1)
+  await new Promise((r) => setImmediate(r))
+  assert.deepEqual(written(qrc), [0.5, 1])
+})
+
+test('an encoder does nothing until the Core has reported a starting value', async () => {
+  // Without a known value there is nothing to add a delta to, and guessing
+  // would jump the gain somewhere the operator did not ask for.
+  const { qrc, engine } = build(encoderConfig())
+  engine.handleCC(1, 16, 1)
+  await new Promise((r) => setImmediate(r))
+  assert.deepEqual(written(qrc), [])
+})
+
+test('an encoder resting at centre writes nothing', async () => {
+  const { qrc, engine } = build(encoderConfig())
+  pushTrim(qrc, 0)
+  engine.handleCC(1, 16, 0)
+  await new Promise((r) => setImmediate(r))
+  assert.deepEqual(written(qrc), [])
+})
+
+test('the signed encoding reads 65 as up and 63 as down', async () => {
+  // Some surfaces centre on 64 instead of using the MCU sign bit.
+  const { qrc, engine } = build(encoderConfig('signed'))
+  pushTrim(qrc, 0)
+  engine.handleCC(1, 16, 65)
+  await new Promise((r) => setImmediate(r))
+  engine.handleCC(1, 16, 63)
+  await new Promise((r) => setImmediate(r))
+  assert.deepEqual(written(qrc), [0.5, 0])
+})

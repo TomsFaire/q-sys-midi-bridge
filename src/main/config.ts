@@ -30,6 +30,11 @@ export interface QsysRef {
   // component_control_relative: how far one encoder tick moves the value.
   // Defaults to 1 when absent. min/max clamp the result.
   step?: number
+  // How an encoder spells a tick. "mcu" (the default, and what the X-Touch
+  // sends in MCU mode) puts the direction in bit 6: 0x01-0x3F is clockwise
+  // and 0x41-0x7F is anticlockwise, with the magnitude in the low bits.
+  // "signed" centres on 64, so 65 is one up and 63 is one down.
+  encoding?: 'mcu' | 'signed'
   // stereo gang — moves with the primary target
   link?: QsysLink
 }

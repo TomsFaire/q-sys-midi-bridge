@@ -27,6 +27,26 @@ const TOUCH_NOTE_MAX = 112
 const keyOf = (t: Target): string => `${t.component}:${t.control}`
 
 /**
+ * How far an encoder was turned, in ticks, signed clockwise-positive.
+ *
+ * MCU puts the direction in bit 6 — 0x01-0x3F clockwise, 0x41-0x7F
+ * anticlockwise — and the magnitude in the low bits, so a faster turn
+ * reports more ticks. The "signed" variant centres on 64 instead.
+ */
+function decodeRelativeTicks(value: number, encoding: 'mcu' | 'signed'): number {
+  if (encoding === 'signed') return value - 64
+  return value & 0x40 ? -(value & 0x3f) : value & 0x3f
+}
+
+/** Keeps a value inside whichever of min/max the mapping actually sets. */
+function clamp(value: number, min?: number, max?: number): number {
+  let out = value
+  if (min !== undefined) out = Math.max(min, out)
+  if (max !== undefined) out = Math.min(max, out)
+  return out
+}
+
+/**
  * The primary target, plus the ganged leg when `qsys.link` is set. A link
  * field left out is inherited from the primary, so `{ component }` alone
  * means "other component, same control" and `{ control }` alone means
@@ -299,6 +319,27 @@ export class MappingEngine {
         const targets = resolveTargets(q)
         await this.setTargets(targets, scaled)
         this.log(`${label} → ${scaled.toFixed(1)}${targets.length > 1 ? ' (ganged)' : ''}`)
+        break
+      }
+
+      case 'component_control_relative': {
+        // An encoder reports movement, not position, so the new value is the
+        // last one the Core reported plus the delta. Until the Core has told
+        // us where the control sits there is nothing to add to, and guessing
+        // would jump the value somewhere nobody asked for.
+        const targets = resolveTargets(q)
+        const current = this.controlValues.get(keyOf(targets[0]))
+        if (current === undefined) {
+          console.warn(`[Bridge] ${label}: no value from the Core yet, ignoring tick`)
+          break
+        }
+        const ticks = decodeRelativeTicks(midiValue, q.encoding ?? 'mcu')
+        if (ticks === 0) break
+        const next = clamp(current + ticks * (q.step ?? 1), q.min, q.max)
+        if (next === current) break
+        for (const t of targets) this.controlValues.set(keyOf(t), next)
+        await this.setTargets(targets, next)
+        this.log(`${label} → ${next.toFixed(1)}${targets.length > 1 ? ' (ganged)' : ''}`)
         break
       }
 

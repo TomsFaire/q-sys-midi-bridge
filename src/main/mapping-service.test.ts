@@ -137,3 +137,23 @@ test('validateMappings still rejects a cc mapping with no number', () => {
   ])
   assert.equal(result.valid, false)
 })
+
+test('validateMappings rejects an encoder encoding it does not know', () => {
+  // A typo here would silently fall back to a default and turn the wrong way.
+  const result = validateMappings([
+    { midi: { type: 'cc', channel: 1, number: 16 },
+      qsys: { type: 'component_control_relative', component: 'A.Gain', control: 'gain', encoding: 'backwards' } },
+  ])
+  assert.equal(result.valid, false)
+  if (!result.valid) assert.match(result.errors[0].reason, /encoding/)
+})
+
+test('validateMappings accepts both encodings it knows', () => {
+  for (const encoding of ['mcu', 'signed']) {
+    const result = validateMappings([
+      { midi: { type: 'cc', channel: 1, number: 16 },
+        qsys: { type: 'component_control_relative', component: 'A.Gain', control: 'gain', encoding } },
+    ])
+    assert.equal(result.valid, true, `${encoding} should be valid`)
+  }
+})

@@ -184,10 +184,14 @@ export function validateMappings(
     if (!qsys || typeof qsys.type !== 'string' || !validTypes.has(qsys.type as string)) {
       errors.push({ index, reason: `qsys.type must be one of ${[...validTypes].join(', ')}` })
     }
-    if (qsys?.type === 'component_control_relative' && qsys.step !== undefined) {
+    if (qsys?.type === 'component_control_relative') {
       const step = qsys.step
-      if (typeof step !== 'number' || !Number.isFinite(step) || step <= 0) {
+      if (step !== undefined && (typeof step !== 'number' || !Number.isFinite(step) || step <= 0)) {
         errors.push({ index, reason: 'qsys.step must be a positive number' })
+      }
+      const encoding = qsys.encoding
+      if (encoding !== undefined && encoding !== 'mcu' && encoding !== 'signed') {
+        errors.push({ index, reason: 'qsys.encoding must be "mcu" or "signed"' })
       }
     }
     if (qsys?.link !== undefined) {
