@@ -435,10 +435,14 @@
     async function load() {
       let state = { physicalControls: [], mappings: [] }
       try {
-        state = await adapter.loadEditorState()
+        // A null/undefined answer is a failed load, not an empty one: treating
+        // it as empty would let a save wipe the stored mappings.
+        state = (await adapter.loadEditorState()) || null
+        if (!state) throw new Error('the server returned no mapping data')
         loadFailed = false
       } catch (e) {
         loadFailed = true
+        state = { physicalControls: [], mappings: [] }
         say('err', 'Could not load mappings: ' + messageOf(e))
       }
 
@@ -488,8 +492,10 @@
       }
       say('info', busy)
       try {
-        const result = await adapter[method](getMappings())
-        say('ok', done + ' — ' + (result && result.count) + ' mappings')
+        const sent = getMappings()
+        const result = await adapter[method](sent)
+        const count = result && typeof result.count === 'number' ? result.count : sent.length
+        say('ok', done + ' — ' + count + ' mappings')
         return true
       } catch (e) {
         say('err', messageOf(e))

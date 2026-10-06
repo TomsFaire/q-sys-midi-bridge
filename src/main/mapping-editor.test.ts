@@ -9,6 +9,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { loadSharedEditor, makeDomElement, fireEvent } from './helpers/load-shared-editor.js'
 import { GOLDEN_FIXTURES, KNOB_A1, MUTE_1 } from './helpers/golden-fixtures.js'
+import { validateMappings } from './mapping-service.js'
 
 test('buildMappings reproduces every golden fixture', () => {
   assert.equal(GOLDEN_FIXTURES.length, 9)
@@ -474,4 +475,86 @@ test('view.text matches label or id, ignoring case', () => {
   const view = { group: 'all', text: 'KNOB A 2' }
   const ed = loadSharedEditor().__internals.createEditor({ physicalControls: [KNOB_A1, KNOB_A2], view })
   assert.deepEqual(idsOf(ed), ['Ka2'])
+})
+
+// ---- Task 6 carry-overs and ports from the retired page tests ------------
+
+test('a loadEditorState resolving undefined still renders a usable table and reports an error', async () => {
+  const statuses: any[] = []
+  const ed = await mountWith({ loadEditorState: async () => undefined }, statuses)
+  assert.ok(ed.root.querySelector('table'), 'the table must exist, not just the toolbar')
+  assert.ok(ed.root.querySelector('tbody'))
+  assert.ok(statuses.some(s => s.kind === 'err'), 'an empty load must be reported')
+  assert.deepEqual(JSON.parse(JSON.stringify(ed.getMappings())), [])
+  await ed.save()
+  assert.ok(statuses.some(s => s.kind === 'err' && /Not saved/.test(s.text)),
+    'an empty load must not be saveable over stored mappings')
+})
+
+test('a null loadEditorState is treated the same as undefined', async () => {
+  const statuses: any[] = []
+  const ed = await mountWith({ loadEditorState: async () => null }, statuses)
+  assert.ok(ed.root.querySelector('tbody'))
+  assert.ok(statuses.some(s => s.kind === 'err'))
+})
+
+test('a save result without a count falls back to the number of mappings sent', async () => {
+  const statuses: any[] = []
+  const ed = await mountWith(withMapping({ save: async () => ({}) }), statuses)
+  await ed.save()
+  const ok = statuses.find(s => s.kind === 'ok')
+  assert.ok(ok, 'expected an ok status')
+  assert.doesNotMatch(ok.text, /undefined/)
+  assert.match(ok.text, /1 mappings/)
+})
+
+test('a saveAndApply result of undefined also falls back to the mappings length', async () => {
+  const statuses: any[] = []
+  const ed = await mountWith(withMapping({ saveAndApply: async () => undefined }), statuses)
+  await ed.saveAndApply()
+  const ok = statuses.find(s => s.kind === 'ok')
+  assert.ok(ok)
+  assert.match(ok.text, /1 mappings/)
+})
+
+test('everything the editor emits for a gang passes server validation', () => {
+  const { buildMappings } = loadSharedEditor().__internals
+  const ganged = GOLDEN_FIXTURES.filter(f => f.expected && f.expected.qsys.link)
+  assert.ok(ganged.length >= 3, 'expected component-only, control-only, both-differ and toggle gangs')
+  for (const f of ganged) {
+    const out = JSON.parse(JSON.stringify(buildMappings([f.pc], new Map([[f.pc.id, f.assignment]]))))
+    assert.ok(out[0].qsys.link, f.name)
+    assert.equal(validateMappings(out).valid, true, f.name)
+  }
+})
+
+async function roundTrip(pc: any, saved: any[]): Promise<any[]> {
+  const ed = await mountWith({ loadEditorState: async () => ({ physicalControls: [pc], mappings: saved }) })
+  return JSON.parse(JSON.stringify(ed.getMappings()))
+}
+
+test('a component-only link survives a load and re-save unchanged', async () => {
+  const saved = [{
+    label: 'Knob A 1', midi: { type: 'cc', channel: 4, number: 22 },
+    qsys: { type: 'component_control', component: 'Dante.In.9.Gain', control: 'gain',
+            min: -100, max: 20, link: { component: 'Dante.In.10.Gain' } },
+  }]
+  assert.deepEqual(await roundTrip(KNOB_A1, saved), saved)
+})
+
+test('a control-only link survives a load and re-save unchanged', async () => {
+  const saved = [{
+    label: 'Knob A 1', midi: { type: 'cc', channel: 4, number: 22 },
+    qsys: { type: 'component_control', component: 'Dante.Pair.Gain', control: 'gain.1',
+            min: -100, max: 20, link: { control: 'gain.2' } },
+  }]
+  assert.deepEqual(await roundTrip(KNOB_A1, saved), saved)
+})
+
+test('an unlinked mapping gains no link by passing through the editor', async () => {
+  const saved = [{
+    label: 'Knob A 1', midi: { type: 'cc', channel: 4, number: 22 },
+    qsys: { type: 'component_control', component: 'Mic.02.Gain', control: 'gain', min: -100, max: 20 },
+  }]
+  assert.deepEqual(await roundTrip(KNOB_A1, saved), saved)
 })
