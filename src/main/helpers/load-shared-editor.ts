@@ -80,8 +80,28 @@ class StubElement {
   }
   setAttribute(k: string, v: string) { this.attrs[k] = String(v) }
   getAttribute(k: string) { return k in this.attrs ? this.attrs[k] : null }
-  addEventListener() {}
-  removeEventListener() {}
+  private listeners: Record<string, Array<(e: Any) => Any>> = {}
+  addEventListener(type: string, fn: (e: Any) => Any) { (this.listeners[type] ??= []).push(fn) }
+  removeEventListener(type: string, fn: (e: Any) => Any) {
+    this.listeners[type] = (this.listeners[type] ?? []).filter(f => f !== fn)
+  }
+  /**
+   * Runs the REAL listeners on this element and each ancestor (events bubble).
+   * Async listeners' promises are collected on event.pending so fireEvent can
+   * await them; a listener that throws or rejects fails the calling test.
+   */
+  dispatchEvent(ev: Any): boolean {
+    ev.target ??= this
+    ev.pending ??= []
+    for (let el: StubElement | null = this; el; el = el.parentNode) {
+      ev.currentTarget = el
+      for (const fn of [...(el.listeners[ev.type] ?? [])]) {
+        const r = fn.call(el, ev)
+        if (r && typeof r.then === 'function') ev.pending.push(r)
+      }
+    }
+    return true
+  }
 
   private attr(name: string): string | undefined {
     if (name.startsWith('data-')) {
@@ -151,6 +171,19 @@ function makeDocument(): Any {
     addEventListener: () => {},
     body: makeElement('body'),
   }
+}
+
+/** A bare DOM element for tests that need to hand the editor a mount point. */
+export function makeDomElement(tag = 'div'): Any { return makeElement(tag) }
+
+/**
+ * Dispatches a bubbling event at el through the stub's real listener chain and
+ * resolves once every async listener has settled.
+ */
+export async function fireEvent(el: Any, type: string): Promise<void> {
+  const ev: Any = { type, bubbles: true, pending: [] }
+  el.dispatchEvent(ev)
+  await Promise.all(ev.pending)
 }
 
 export function loadSharedEditor(): Any {

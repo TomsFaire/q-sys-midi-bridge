@@ -75,8 +75,10 @@
     const components = opts.components || []
     const getControls = opts.getControls || null
     const ctrlCache = new Map()
+    const pendingControls = new Map()
     const assignments = new Map()
-    const view = { group: 'all', text: '' }
+    // The caller may own the view so tab and filter state survive a rebuild.
+    const view = opts.view || { group: 'all', text: '' }
 
     for (const mObj of opts.mappings || []) {
       const pc = physicalControls.find(p =>
@@ -108,14 +110,29 @@
     root.appendChild(table)
     root.appendChild(countLabel)
 
+    // Resolves to the component's controls and never rejects. A failed lookup
+    // is cached as [] (free-text entry), so a failing Core is asked once, not
+    // on every row render. Concurrent callers share one in-flight request.
+    function loadControls(componentName) {
+      if (ctrlCache.has(componentName)) return Promise.resolve(ctrlCache.get(componentName))
+      if (!getControls) return Promise.resolve([])
+      if (pendingControls.has(componentName)) return pendingControls.get(componentName)
+      const p = Promise.resolve().then(() => getControls(componentName)).then(
+        ctrls => ctrls || [], () => []
+      ).then(ctrls => {
+        ctrlCache.set(componentName, ctrls)
+        pendingControls.delete(componentName)
+        return ctrls
+      })
+      pendingControls.set(componentName, p)
+      return p
+    }
+
     function fillDatalist(dl, componentName) {
       if (!componentName) return
       if (ctrlCache.has(componentName)) { populateDatalist(dl, ctrlCache.get(componentName)); return }
       if (!getControls) return
-      getControls(componentName).then(ctrls => {
-        ctrlCache.set(componentName, ctrls)
-        populateDatalist(dl, ctrls)
-      }, () => {})
+      loadControls(componentName).then(ctrls => populateDatalist(dl, ctrls))
     }
 
     // A component the Core did not report (renamed, or the Core is offline)
@@ -277,6 +294,58 @@
       if (a && a.link) fresh.after(buildLinkRowElement(pc, a))
     }
 
+    // Delegated from tbody. Typing (input) never re-renders, so the user's
+    // caret survives; structural changes re-render only the affected row.
+    tbody.addEventListener('change', async e => {
+      const t = e.target
+      const id = t.dataset && t.dataset.id
+      if (!id) return
+      if (t.classList.contains('comp-sel')) {
+        const componentName = t.value
+        if (!componentName) { assignments.delete(id); renderRow(id); return }
+        repointPrimary(assignments, id, componentName)
+        await loadControls(componentName)
+        renderRow(id)
+      } else if (t.classList.contains('lnk-chk')) {
+        const a = assignments.get(id)
+        if (!a) return
+        // Seed the new leg from the primary so the common case (same control
+        // name on the neighbouring component) only needs the component picked.
+        assignments.set(id, { ...a, link: t.checked ? { component: '', control: a.controlName } : null })
+        renderRow(id)
+      } else if (t.classList.contains('lnk-comp-sel')) {
+        const a = assignments.get(id)
+        if (!a || !a.link) return
+        assignments.set(id, { ...a, link: { ...a.link, component: t.value } })
+        if (t.value) await loadControls(t.value)
+        renderRow(id)
+      }
+    })
+
+    tbody.addEventListener('input', e => {
+      const t = e.target
+      const id = t.dataset && t.dataset.id
+      if (!id) return
+      const a = assignments.get(id) || {}
+      if (t.classList.contains('lnk-ctrl-input')) {
+        if (!a.link) return
+        assignments.set(id, { ...a, link: { ...a.link, control: t.value.trim() } })
+      } else if (t.classList.contains('ctrl-input')) {
+        assignments.set(id, { ...a, controlName: t.value.trim() })
+      } else if (t.classList.contains('min-inp')) {
+        assignments.set(id, { ...a, min: parseFloat(t.value) || 0 })
+      } else if (t.classList.contains('max-inp')) {
+        assignments.set(id, { ...a, max: parseFloat(t.value) || 1 })
+      }
+    })
+
+    tbody.addEventListener('click', e => {
+      const btn = e.target.closest && e.target.closest('.clear-btn')
+      if (!btn) return
+      assignments.delete(btn.dataset.id)
+      renderRow(btn.dataset.id)
+    })
+
     renderTable()
 
     return {
@@ -285,7 +354,150 @@
     }
   }
 
+  function messageOf(e) {
+    return e && e.message ? e.message : String(e)
+  }
+
+  function naturalSort(controls) {
+    return controls.slice().sort((a, b) =>
+      a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }))
+  }
+
+  /**
+   * Public entry point. Owns the adapter, performs the initial load and wires
+   * the tab/filter toolbar. Adapter methods throw; every failure is caught here
+   * and reported through onStatus({ kind: 'info' | 'ok' | 'err', text }).
+   * Q-Sys being unreachable is not fatal: the table still renders and control
+   * names fall back to free text, so mappings stay editable with the Core off.
+   */
+  async function mount(opts) {
+    const host = opts.root
+    const adapter = opts.adapter
+    const say = (kind, text) => { if (opts.onStatus) opts.onStatus({ kind, text }) }
+    const view = { group: 'all', text: '' }
+    let editor = null
+    let physicalControls = []
+    // When the initial load fails the table is empty. Saving that would wipe
+    // the stored mappings, so saves are refused until a load succeeds.
+    let loadFailed = false
+
+    const toolbar = el('div', { className: 'me-toolbar' })
+    const tabs = el('div', { className: 'me-tabs' })
+    const filter = el('input', { type: 'search', className: 'filter-input', placeholder: 'Filter e.g. Fader 1, Mute…' })
+    toolbar.appendChild(tabs)
+    toolbar.appendChild(filter)
+
+    function rerender() { if (editor) editor.__internals.renderTable() }
+
+    function buildTabs() {
+      tabs.textContent = ''
+      const groups = []
+      for (const pc of physicalControls) if (!groups.includes(pc.group)) groups.push(pc.group)
+      if (view.group !== 'all' && !groups.includes(view.group)) view.group = 'all'
+      for (const g of ['all'].concat(groups)) {
+        const b = el('button', { className: 'tab' + (g === view.group ? ' active' : ''),
+                                 textContent: g === 'all' ? 'All' : g })
+        b.dataset.group = g
+        tabs.appendChild(b)
+      }
+    }
+
+    tabs.addEventListener('click', e => {
+      const tab = e.target.closest && e.target.closest('.tab')
+      if (!tab) return
+      for (const t of tabs.querySelectorAll('.tab')) t.classList.remove('active')
+      tab.classList.add('active')
+      view.group = tab.dataset.group
+      rerender()
+    })
+
+    filter.addEventListener('input', e => {
+      view.text = e.target.value
+      rerender()
+    })
+
+    async function load() {
+      let state = { physicalControls: [], mappings: [] }
+      try {
+        state = await adapter.loadEditorState()
+        loadFailed = false
+      } catch (e) {
+        loadFailed = true
+        say('err', 'Could not load mappings: ' + messageOf(e))
+      }
+
+      let connected = true
+      try {
+        const st = await adapter.getQsysStatus()
+        connected = !!(st && st.connected)
+        if (!connected) say('info', 'Q-Sys is not connected. Control names are free text until it is.')
+      } catch (e) {
+        say('err', 'Q-Sys status: ' + messageOf(e))
+      }
+
+      let components = []
+      if (connected) {
+        try {
+          components = await adapter.discoverComponents() || []
+        } catch (e) {
+          say('err', 'Q-Sys: ' + messageOf(e))
+        }
+      }
+
+      physicalControls = state.physicalControls || []
+      buildTabs()
+      filter.value = view.text
+      const fresh = createEditor({
+        physicalControls,
+        mappings: state.mappings || [],
+        components,
+        view,
+        getControls: name => Promise.resolve(adapter.getComponentControls(name)).then(naturalSort),
+      })
+      if (editor) editor.root.replaceWith(fresh.root)
+      else host.appendChild(fresh.root)
+      editor = fresh
+      handle.root = host
+      handle.__internals = fresh.__internals
+    }
+
+    function getMappings() {
+      return buildMappings(physicalControls, editor.__internals.assignments)
+    }
+
+    async function send(method, busy, done) {
+      if (loadFailed) {
+        say('err', 'Not saved: the mappings failed to load, so saving would overwrite them. Reload first.')
+        return false
+      }
+      say('info', busy)
+      try {
+        const result = await adapter[method](getMappings())
+        say('ok', done + ' — ' + (result && result.count) + ' mappings')
+        return true
+      } catch (e) {
+        say('err', messageOf(e))
+        return false
+      }
+    }
+
+    const handle = {
+      root: host,
+      __internals: null,
+      getMappings,
+      save: () => send('save', 'Saving…', 'Saved'),
+      saveAndApply: () => send('saveAndApply', 'Applying…', 'Applied'),
+      reload: load,
+    }
+
+    host.textContent = ''
+    host.appendChild(toolbar)
+    await load()
+    return handle
+  }
+
   global.MappingEditor = {
+    mount,
     __internals: { buildMappings, guessRange, withLink, repointPrimary, createEditor, populateDatalist },
   }
 })(typeof window !== 'undefined' ? window : globalThis)
