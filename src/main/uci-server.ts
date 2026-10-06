@@ -7,8 +7,9 @@
  * TCP socket to the Core, proxied byte-for-byte over its WebSocket — ported
  * verbatim from Q-sys-MCP-webUI/backend/src/server.ts (lines 77–121).
  *
- * No Express — a plain http.createServer with two routes:
+ * No Express — a plain http.createServer with these routes:
  *   GET /foh-uci → bundled assets/uci/foh-uci.html
+ *   GET /shared/<file> → bundled assets/shared/<file> (.js / .css only)
  *   everything else → 404
  *
  * Wire format matches QrcClient: null-byte (\0) terminated JSON messages.
@@ -53,6 +54,27 @@ function isRelayLogonReply(msg: string): boolean {
   }
 }
 
+/** Content types for the files assets/shared/ may serve — anything else is a 404. */
+const SHARED_CONTENT_TYPES: Record<string, string> = {
+  '.js': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+}
+
+/**
+ * Resolves `pathname` (e.g. "/shared/mapping-editor.css") to a file inside
+ * `sharedDir`, or null if it is not a plain file name we serve. The name is
+ * decoded first so "%2E%2E" cannot sneak past the ".." check, and any
+ * separator is refused, which keeps the lookup to one flat directory.
+ */
+function resolveSharedFile(pathname: string, sharedDir: string): { file: string; type: string } | null {
+  let name: string
+  try { name = decodeURIComponent(pathname.slice('/shared/'.length)) } catch { return null }
+  if (!name || name.includes('..') || /[\\/\0]/.test(name)) return null
+  const type = SHARED_CONTENT_TYPES[path.extname(name).toLowerCase()]
+  if (!type) return null
+  return { file: path.join(sharedDir, name), type }
+}
+
 export class UciServer extends EventEmitter {
   private server: http.Server | null = null
   private wss: WebSocketServer | null = null
@@ -87,8 +109,30 @@ export class UciServer extends EventEmitter {
     // in dev (npm start) and in a packaged app — never relative to __dirname.
     const uciHtmlPath = path.join(app.getAppPath(), 'assets', 'uci', 'foh-uci.html')
 
+    const sharedDir = path.join(app.getAppPath(), 'assets', 'shared')
+
     const server = http.createServer((req, res) => {
       if (this.mappingsHandler?.handle(req, res)) return
+
+      if (req.method === 'GET' && req.url?.startsWith('/shared/')) {
+        const pathname = new URL(req.url, 'http://internal').pathname
+        const target = resolveSharedFile(pathname, sharedDir)
+        if (!target) {
+          res.writeHead(404, { 'Content-Type': 'text/plain' })
+          res.end('Not found')
+          return
+        }
+        fs.readFile(target.file, (err, data) => {
+          if (err) {
+            res.writeHead(404, { 'Content-Type': 'text/plain' })
+            res.end('Not found')
+            return
+          }
+          res.writeHead(200, { 'Content-Type': target.type })
+          res.end(data)
+        })
+        return
+      }
 
       if (req.method === 'GET' && (req.url === '/foh-uci' || req.url?.startsWith('/foh-uci?'))) {
         fs.readFile(uciHtmlPath, (err, data) => {
