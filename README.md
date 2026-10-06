@@ -144,9 +144,10 @@ Each entry maps one MIDI event to one Q-Sys action.
 {
   "label": "Mic 1 Fader",          // optional — shown in tray activity log
   "midi": {
-    "type": "cc",                   // "cc" or "note_on"
+    "type": "cc",                   // "cc", "note_on" or "pitchbend"
     "channel": 1,                   // MIDI channel, 1-indexed
-    "number": 19                    // CC number or note number
+    "number": 19                    // CC or note number; omitted for pitchbend,
+                                    // which is addressed by channel alone
   },
   "qsys": { ... }                   // see action types below
 }
@@ -367,6 +368,76 @@ When `feedback.enabled` is `true`, the bridge subscribes to mute control changes
 The note numbers in `mute_leds` must match the note numbers in the corresponding `toggle` mappings for the LEDs to track correctly.
 
 When `enabled: false`, toggle state is tracked locally only — the LED will drift if anything else changes the mute outside the MIDI controller.
+
+---
+
+## Motorised faders (X-Touch and other MCU surfaces)
+
+A surface that speaks Mackie Control — the Behringer X-Touch, for one — sends
+fader moves as 14-bit **pitch bend**, one MIDI channel per fader, and takes the
+same message back to drive the motor. Nothing here applies to the MIDImix,
+which has no motors: leave `fader_positions` out and its behaviour is unchanged.
+
+**Inbound**, a fader is a mapping whose `midi.type` is `pitchbend`. It is
+addressed by channel, so it carries no `number`:
+
+```jsonc
+{ "label": "Mic 1 Fader",
+  "midi": { "type": "pitchbend", "channel": 1 },
+  "qsys": { "type": "component_control", "component": "Mic.01.Gain",
+            "control": "gain", "min": -100, "max": 20 } }
+```
+
+**Outbound**, `feedback.fader_positions` is what moves the motor. `midi.channel`
+is the pitch bend channel, and `min`/`max` are the dB range the fader's travel
+spans — normally the same pair the inbound mapping uses:
+
+```jsonc
+"feedback": {
+  "enabled": true,
+  "mute_leds": [ /* ... */ ],
+  "fader_positions": [
+    { "component": "Mic.01.Gain", "control": "gain",
+      "midi": { "channel": 1 }, "min": -100, "max": 20 }
+  ]
+}
+```
+
+Faders share the mute ChangeGroup rather than opening a second one — a Core's
+change group budget is small, and a spare group is one the UCI needs.
+
+**Touch** is handled for you. MCU touch notes are 104–111 for faders 1–8 and
+112 for the master, which is the pitch bend channel plus 103. While a fader is
+held its motor stays put, so it never fights the operator's hand, and on release
+it snaps to whatever value Q-SYS reached in the meantime.
+
+### `component_control_relative` — V-Pots and other endless encoders
+
+An encoder reports movement, not position, so this action adds a delta to the
+value Q-SYS last reported rather than scaling an absolute one:
+
+```jsonc
+{ "label": "Trim 1",
+  "midi": { "type": "cc", "channel": 1, "number": 16 },
+  "qsys": { "type": "component_control_relative", "component": "Mic.01.Gain",
+            "control": "gain", "step": 0.5, "min": -18, "max": 18 } }
+```
+
+`step` is how far one tick moves the value (default 1) and `min`/`max` clamp the
+result. A tick arriving before Q-SYS has reported a starting value is ignored —
+there is nothing to add to, and guessing would jump the gain somewhere nobody
+asked for. The bridge subscribes each encoder's target to the ChangeGroup for
+exactly this reason, so no extra `fader_positions` entry is needed to make one
+work.
+
+`encoding` selects how a tick is spelled, and the default `"mcu"` is what an
+X-Touch sends: `0x01`–`0x3F` clockwise, `0x41`–`0x7F` anticlockwise, magnitude in
+the low bits so a faster turn moves further. Set it to `"signed"` for a surface
+that centres on 64 instead, where 65 is one up and 63 is one down. **If your
+encoders turn the wrong way, this is the field to flip** — no code change.
+
+> Untested on hardware. Everything in this section is covered by unit tests but
+> has not been run against a physical X-Touch.
 
 ---
 

@@ -15,7 +15,7 @@ export interface QsysLink {
 }
 
 export interface QsysRef {
-  type: 'component_control' | 'toggle' | 'named_control' | 'snapshot'
+  type: 'component_control' | 'component_control_relative' | 'toggle' | 'named_control' | 'snapshot'
   // component_control / toggle
   component?: string
   control?: string
@@ -27,14 +27,24 @@ export interface QsysRef {
   // scaling for CC mappings (dB range etc.)
   min?: number
   max?: number
+  // component_control_relative: how far one encoder tick moves the value.
+  // Defaults to 1 when absent. min/max clamp the result.
+  step?: number
+  // How an encoder spells a tick. "mcu" (the default, and what the X-Touch
+  // sends in MCU mode) puts the direction in bit 6: 0x01-0x3F is clockwise
+  // and 0x41-0x7F is anticlockwise, with the magnitude in the low bits.
+  // "signed" centres on 64, so 65 is one up and 63 is one down.
+  encoding?: 'mcu' | 'signed'
   // stereo gang — moves with the primary target
   link?: QsysLink
 }
 
 export interface MidiRef {
-  type: 'cc' | 'note_on'
+  // pitchbend is the MCU fader protocol: 14-bit, one MIDI channel per fader,
+  // so it is addressed by channel alone and carries no number.
+  type: 'cc' | 'note_on' | 'pitchbend'
   channel: number  // 1-indexed
-  number: number   // CC number or note number
+  number?: number  // CC number or note number; absent for pitchbend
 }
 
 export interface Mapping {
@@ -49,13 +59,27 @@ export interface FeedbackLED {
   midi: { channel: number; note: number }
 }
 
+/**
+ * A motorised fader that follows a Q-SYS value. `midi.channel` is the pitch
+ * bend channel (1-indexed), and min/max are the dB range the fader's full
+ * travel spans — the same pair the inbound mapping scales with.
+ */
+export interface FaderFeedback {
+  component: string
+  control: string
+  midi: { channel: number }
+  min: number
+  max: number
+}
+
 export interface Config {
   // username/password are only needed when the Core has Access Control
   // enabled; leave them out (or blank) for an open Core.
   qsys: { host: string; port: number; username?: string; password?: string }
   midi: { deviceName: string }
   mappings: Mapping[]
-  feedback: { enabled: boolean; mute_leds: FeedbackLED[] }
+  // fader_positions is absent for a MIDImix rig, which has no motors.
+  feedback: { enabled: boolean; mute_leds: FeedbackLED[]; fader_positions?: FaderFeedback[] }
   // UCI web server (serves foh-uci.html + relays browser WS to the Core).
   // Defaults when absent: enabled: true, port: 3001.
   uci?: { enabled?: boolean; port?: number; mappingsPasswordHash?: string }

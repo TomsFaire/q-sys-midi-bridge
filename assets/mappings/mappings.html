@@ -129,6 +129,10 @@
 
 <script>
 let physicalControls = []
+// Mappings for hardware this page doesn't model, held across a save.
+let foreignMappings = []
+// The only two Q-SYS actions this page can show and re-emit.
+const EDITABLE_ACTIONS = ['component_control', 'toggle']
 let components = []
 const ctrlCache = new Map()
 const assignments = new Map()
@@ -185,10 +189,19 @@ async function loadApp() {
   const data = await api('/api/mappings')
   physicalControls = data.physicalControls
   assignments.clear()
+  foreignMappings = []
   for (const mObj of data.mappings) {
     const pc = physicalControls.find(p =>
       p.midi.type === mObj.midi.type && p.midi.channel === mObj.midi.channel && p.midi.number === mObj.midi.number)
-    if (pc) {
+    // This page can only express a knob or a toggle on a MIDImix control, and
+    // it rewrites the whole array on save. Anything else is held verbatim and
+    // put back: an X-Touch fader matches no control here, but a V-Pot on CC 22
+    // matches "Mute 1" exactly, and rewriting it as a toggle would corrupt it.
+    if (!pc || !EDITABLE_ACTIONS.includes(mObj.qsys.type)) {
+      foreignMappings.push(mObj)
+      continue
+    }
+    {
       assignments.set(pc.id, {
         component: mObj.qsys.component ?? '',
         controlName: mObj.qsys.control ?? '',
@@ -478,7 +491,8 @@ document.getElementById('refresh-btn').addEventListener('click', async () => {
 })
 
 function buildMappings() {
-  const mappings = []
+  // Mappings this page can't show go back exactly as they came in.
+  const mappings = foreignMappings.map(m => JSON.parse(JSON.stringify(m)))
   for (const pc of physicalControls) {
     const a = assignments.get(pc.id)
     if (!a?.component || !a?.controlName) continue
