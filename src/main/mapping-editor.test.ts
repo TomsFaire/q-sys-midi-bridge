@@ -792,3 +792,19 @@ test('configurator buttons: Refresh -> refreshComponents, Save -> save, Save & A
   await p.listeners.get('save-restart-btn')!.click()
   assert.deepEqual(p.calls, ['refreshComponents', 'save', 'saveAndApply'])
 })
+
+// ── Task 7 fix round 1 ──────────────────────────────────────────────────────
+
+test('configurator: #editor-root is a flex child that can shrink so the table scrolls above the footer', () => {
+  const m = CONFIGURATOR_HTML.match(/#editor-root\s*\{([^}]*)\}/)
+  assert.ok(m, 'page must style #editor-root')
+  assert.match(m![1], /flex:\s*1/)
+  assert.match(m![1], /min-height:\s*0/)
+  assert.match(m![1], /display:\s*flex/)
+  assert.match(m![1], /flex-direction:\s*column/)
+})
+
+test('shared stylesheet centres the Type column header like its body cells', () => {
+  const css = fs.readFileSync(path.join(__dirname, '..', '..', 'assets', 'shared', 'mapping-editor.css'), 'utf-8')
+  assert.match(css, /\.mapping-editor th:nth-child\(2\)\s*\{[^}]*text-align:\s*center/)
+})

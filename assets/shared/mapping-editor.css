@@ -60,7 +60,7 @@ th {
    header row and nothing else. They hold under both table-layout: auto and
    the desktop page's fixed layout, which sizes columns from the first row. */
 .mapping-editor th:nth-child(1) { width: 120px; }  /* Control */
-.mapping-editor th:nth-child(2) { width: 72px; }   /* Type */
+.mapping-editor th:nth-child(2) { width: 72px; text-align: center; }   /* Type */
 .mapping-editor th:nth-child(3) { width: 210px; }  /* Q-Sys Component */
 .mapping-editor th:nth-child(4) { width: 210px; }  /* Control Name */
 .mapping-editor th:nth-child(5) { width: 68px; }   /* Min */

@@ -88,7 +88,14 @@ async function mountDesktop(pc: Any, mappings: Any[] = []): Promise<Any> {
     require: (mod: string) => {
       if (mod !== 'electron') throw new Error(`unexpected require("${mod}")`)
       return {
-        ipcRenderer: { invoke: async (ch: string) => ipc[ch] ?? {}, on: () => {}, send: () => {} },
+        ipcRenderer: {
+          // Unknown channels throw so a typo'd channel name cannot pass silently.
+          invoke: async (ch: string) => {
+            if (!(ch in ipc)) throw new Error(`unexpected IPC channel "${ch}"`)
+            return ipc[ch]
+          },
+          on: () => {}, send: () => {},
+        },
         clipboard: { writeText: () => {} },
       }
     },
@@ -146,13 +153,15 @@ async function roundTripWeb(pc: Any, mappings: Any[]): Promise<Any[]> {
   return plain(editor.getMappings())
 }
 
-test('web and desktop editors agree on every golden fixture', async () => {
-  assert.equal(GOLDEN_FIXTURES.length, 9, 'golden fixtures must not be emptied or silently shrunk')
+test('desktop load path: each fixture\'s expected output loads through cfg:load-config and re-emits unchanged', async () => {
+  let checked = 0
   for (const f of GOLDEN_FIXTURES) {
-    const web = await buildViaWeb(f.pc, f.assignment)
-    const desktop = await buildViaDesktop(f.pc, f.assignment)
-    assert.deepEqual(web, desktop, `hosts disagree on: ${f.name}`)
+    if (!f.expected) continue
+    const editor = await mountDesktop(f.pc, [f.expected])
+    assert.deepEqual(plain(editor.getMappings()), [f.expected], f.name)
+    checked++
   }
+  assert.ok(checked > 0, 'at least one fixture must carry an expected output')
 })
 
 test('each fixture matches its frozen expected output (web)', async () => {

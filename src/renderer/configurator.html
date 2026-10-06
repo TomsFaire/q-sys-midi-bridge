@@ -73,6 +73,10 @@
     table { table-layout: fixed; }
     .td-type  { text-align: center; }
 
+    /* body is a clipped flex column: the editor must be a shrinkable flex child
+       so the table scrolls inside it and the footer stays visible. */
+    #editor-root { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+
     .hidden { display: none; }
 
     /* Control input: text + datalist combo */
