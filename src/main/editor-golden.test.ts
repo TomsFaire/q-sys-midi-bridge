@@ -207,6 +207,32 @@ test('a named_control mapping survives a save', async () => {
   assert.deepEqual(out, [named], 'a named control has no component to show, but must still survive')
 })
 
+test('a component_control with no component survives rather than vanishing', async () => {
+  // It matches a physical control and its type is showable, but a row has
+  // nothing to put in the component field, so buildMappings would skip it and
+  // the save would delete it.
+  const bare = { label: 'Half-written', midi: { type: 'cc', channel: 4, number: 22 },
+                 qsys: { type: 'component_control', control: 'gain' } }
+  const out = await roundTripWeb(KNOB_A1, [bare])
+  assert.deepEqual(out, [bare], 'an entry the row cannot fill must be kept, not dropped')
+})
+
+test('an entry with no qsys block is kept instead of blanking the editor', async () => {
+  const broken = { label: 'Corrupt', midi: { type: 'cc', channel: 4, number: 22 } }
+  const out = await roundTripWeb(KNOB_A1, [broken] as any)
+  assert.deepEqual(out, [broken], 'a malformed entry must not throw out of createEditor')
+})
+
+test('saving twice does not reorder or duplicate carried mappings', async () => {
+  const shown = { label: 'Knob A 1', midi: { type: 'cc', channel: 4, number: 22 },
+                  qsys: { type: 'component_control', component: 'Mic.02.Gain', control: 'gain', min: -100, max: 10 } }
+  const snap = { label: 'Snap', midi: { type: 'note_on', channel: 1, number: 25 },
+                 qsys: { type: 'snapshot', bank: 1, slot: 3 } }
+  const once = await roundTripWeb(KNOB_A1, [shown, snap])
+  const twice = await roundTripWeb(KNOB_A1, once)
+  assert.deepEqual(twice, once, 'save -> reload -> save must be a fixed point, or config diffs churn')
+})
+
 test('showable and unshowable mappings both survive the same save', async () => {
   const shown = { label: 'Knob A 1', midi: { type: 'cc', channel: 4, number: 22 },
                   qsys: { type: 'component_control', component: 'Mic.02.Gain', control: 'gain', min: -100, max: 10 } }

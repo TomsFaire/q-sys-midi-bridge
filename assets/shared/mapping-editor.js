@@ -96,14 +96,21 @@
     // the user's config — these are carried through untouched instead. A
     // rebuild (refreshComponents) skips the seeding loop below, so the caller
     // hands them back the same way it hands back `assignments`.
-    const unrepresented = opts.unrepresented || []
+    // Copied, not shared: the only caller that passes this also passes
+    // `assignments`, which disables the push below — but a future caller that
+    // passed it without `assignments` would otherwise append duplicates on
+    // every rebuild.
+    const unrepresented = (opts.unrepresented || []).slice()
 
     for (const mObj of opts.assignments ? [] : (opts.mappings || [])) {
       const pc = physicalControls.find(p =>
         p.midi.type === mObj.midi.type && p.midi.channel === mObj.midi.channel && p.midi.number === mObj.midi.number)
-      // No row can show it: either no physical control carries that MIDI
-      // address, or the type has no component to put in the row's fields.
-      if (!pc || (mObj.qsys.type !== 'component_control' && mObj.qsys.type !== 'toggle')) {
+      // No row can show it: no physical control carries that MIDI address,
+      // the type has no component to put in the row's fields, or the fields a
+      // row needs are missing. The `?.` matters — an entry with no qsys at all
+      // would otherwise throw here and blank the whole editor.
+      const q = mObj.qsys
+      if (!pc || (q?.type !== 'component_control' && q?.type !== 'toggle') || !q.component || !q.control) {
         unrepresented.push(mObj)
         continue
       }
