@@ -211,6 +211,8 @@ Triggered by Note On. Loads by name or by bank/slot.
 "qsys": { "type": "snapshot", "bank": 1, "slot": 3 }
 ```
 
+**Editing these by hand is safe.** The mapping editors can only show mappings that name a component — `component_control` and `toggle` — so `snapshot` and `named_control` entries, and any mapping whose MIDI address isn't on your controller, have no row of their own. Saving rewrites the whole mappings array, so they are carried through untouched rather than dropped. You won't see them in the editor, but opening it and hitting Save will not delete them.
+
 ### `link` — gang a stereo pair to one physical control
 
 One knob normally drives one Q-Sys control. That's right for a mono mic, but it's only ever half of a stereo source — trim the left leg of a Dante pair and the right stays where it was.

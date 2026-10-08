@@ -180,18 +180,41 @@ test('each fixture matches its frozen expected output (desktop)', async () => {
   }
 })
 
-test('TODAY: a mapping with no matching physical control is dropped on save', async () => {
-  const saved = [{ label: 'Ghost', midi: { type: 'cc', channel: 9, number: 99 },
-                   qsys: { type: 'component_control', component: 'X.Gain', control: 'gain' } }]
-  const out = await roundTripWeb(KNOB_A1, saved)
-  assert.deepEqual(out, [], 'INTENTIONAL: pins current buggy behaviour; expected to change when the data-loss fix lands - flip this test, do not "fix" it.')
+// The editor rewrites the WHOLE mappings array on save, so anything it cannot
+// show as a row is deleted from the user's config unless it is carried through
+// untouched. Two kinds cannot be shown: a mapping whose MIDI address matches no
+// physical control, and a type with no component to put in the row
+// (snapshot, named_control).
+
+test('a mapping with no matching physical control survives a save', async () => {
+  const ghost = { label: 'Ghost', midi: { type: 'cc', channel: 9, number: 99 },
+                  qsys: { type: 'component_control', component: 'X.Gain', control: 'gain' } }
+  const out = await roundTripWeb(KNOB_A1, [ghost])
+  assert.deepEqual(out, [ghost], 'an unshowable mapping must be preserved verbatim, not deleted')
 })
 
-test('TODAY: a snapshot mapping is dropped on save', async () => {
-  const saved = [{ label: 'Snap', midi: { type: 'note_on', channel: 1, number: 25 },
-                   qsys: { type: 'snapshot', bank: 1, slot: 3 } }]
-  const out = await roundTripWeb(BANKL, saved)
-  assert.deepEqual(out, [], 'INTENTIONAL: pins current buggy behaviour; expected to change when the data-loss fix lands - flip this test, do not "fix" it.')
+test('a snapshot mapping survives a save', async () => {
+  const snap = { label: 'Snap', midi: { type: 'note_on', channel: 1, number: 25 },
+                 qsys: { type: 'snapshot', bank: 1, slot: 3 } }
+  const out = await roundTripWeb(BANKL, [snap])
+  assert.deepEqual(out, [snap], 'snapshot buttons must not be destroyed by opening the editor')
+})
+
+test('a named_control mapping survives a save', async () => {
+  const named = { label: 'Master', midi: { type: 'cc', channel: 4, number: 22 },
+                  qsys: { type: 'named_control', name: 'MasterGain', min: 0, max: 100 } }
+  const out = await roundTripWeb(KNOB_A1, [named])
+  assert.deepEqual(out, [named], 'a named control has no component to show, but must still survive')
+})
+
+test('showable and unshowable mappings both survive the same save', async () => {
+  const shown = { label: 'Knob A 1', midi: { type: 'cc', channel: 4, number: 22 },
+                  qsys: { type: 'component_control', component: 'Mic.02.Gain', control: 'gain', min: -100, max: 10 } }
+  const snap = { label: 'Snap', midi: { type: 'note_on', channel: 1, number: 25 },
+                 qsys: { type: 'snapshot', bank: 1, slot: 3 } }
+  const out = await roundTripWeb(KNOB_A1, [shown, snap])
+  assert.equal(out.length, 2, 'the editable row and the carried-through mapping must both be emitted')
+  assert.deepEqual(out.find((m) => m.qsys.type === 'snapshot'), snap)
 })
 
 test('TODAY: two mappings on one MIDI address collapse to the last', async () => {
