@@ -120,7 +120,10 @@ export class MappingEngine {
 
   handleNoteOn(channel: number, note: number): void {
     const mapping = this.noteMap.get(`${channel}:${note}`)
-    if (!mapping) return
+    if (!mapping) {
+      this.log(`note ${channel}:${note} — no mapping for this button`)
+      return
+    }
     this.execute(mapping, 127).catch((err) => {
       console.error(`[Bridge] QRC error for "${mapping.label ?? 'unknown'}": ${err.message}`)
     })
@@ -263,10 +266,15 @@ export class MappingEngine {
   }
 
   private async execute(mapping: Mapping, midiValue: number): Promise<void> {
-    if (!this.qrc.isConnected) return
-
     const q = mapping.qsys
     const label = mapping.label ?? `${mapping.midi.type}:${mapping.midi.number}`
+
+    // Returning silently here made a dropped Core connection indistinguishable
+    // from a broken mapping — raw MIDI in the log, nothing else, no error.
+    if (!this.qrc.isConnected) {
+      this.log(`${label} — Q-SYS not connected, press ignored`)
+      return
+    }
 
     switch (q.type) {
       case 'component_control': {

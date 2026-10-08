@@ -87,6 +87,31 @@ test('a button press after an out-of-band mute toggles from the Core state, not 
   assert.deepEqual(midi.sent, ['on 1:1', 'off 1:1'])
 })
 
+test('a press while the Core is disconnected is reported, not swallowed', async () => {
+  // The silent early return in execute() made a dropped QRC connection look
+  // identical to a broken mapping: raw MIDI scrolls past and nothing else
+  // happens. The activity log has to name the reason.
+  const { qrc, engine } = build()
+  qrc.isConnected = false
+
+  engine.handleNoteOn(1, 1)
+  await new Promise((r) => setImmediate(r))
+
+  assert.match(engine.getRecentActivity()[0] ?? '', /not connected/i)
+  assert.deepEqual(qrc.calls, [])
+})
+
+test('a press on an unmapped button is reported, not swallowed', async () => {
+  // The other half of "nothing happens": the note arrived but matched no
+  // mapping, which is a config problem rather than a connection one.
+  const { engine } = build()
+
+  engine.handleNoteOn(1, 99)
+  await new Promise((r) => setImmediate(r))
+
+  assert.match(engine.getRecentActivity()[0] ?? '', /no mapping/i)
+})
+
 test('a change for a control with no LED entry leaves the LEDs alone', () => {
   const { qrc, midi } = build()
   qrc.emit('notification', 'mutes', {
