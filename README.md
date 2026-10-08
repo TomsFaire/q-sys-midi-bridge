@@ -287,10 +287,12 @@ It walks you through every control one by one and records the CC channel/number 
 Open `src/main/configurator.ts` and edit the `PHYSICAL_CONTROLS` array. Each entry describes one physical control and its MIDI address:
 
 ```typescript
-{ id: 'F1', label: 'Fader 1', group: 'Faders', controlType: 'fader',  midi: m('cc',      7, 22) },
-{ id: 'M1', label: 'Mute 1',  group: 'Mutes',  controlType: 'toggle', midi: m('cc',      1, 22) },
-{ id: 'BL', label: 'Bank L',  group: 'Buttons', controlType: 'toggle', midi: m('note_on', 1, 25) },
+{ id: 'F1', label: 'Fader 1', group: 'Faders',  controlType: 'fader',  midi: m('cc',      7, 22) },
+{ id: 'M1', label: 'Mute 1',  group: 'Mutes',   controlType: 'toggle', midi: m('cc',      1, 22), led: { channel: 1, note: 1  } },
+{ id: 'BL', label: 'Bank L',  group: 'Buttons', controlType: 'toggle', midi: m('note_on', 1, 25), led: { channel: 1, note: 25 } },
 ```
+
+`led` is the note that lights that button's lamp — a different address from what the button sends (see [Feedback](#feedback-bidirectional-mute-sync)). Faders and knobs have none.
 
 `controlType` controls what the configurator generates when you assign a Q-Sys target:
 - `fader` / `knob` → `component_control` (continuous, with min/max scaling)
@@ -360,21 +362,49 @@ When `feedback.enabled` is `true`, the bridge subscribes to mute control changes
 }
 ```
 
-**There is nothing to configure per LED.** The lamps are derived from `mappings`: any mapping with `midi.type: "note_on"` and `qsys.type: "toggle"` lights its own button and subscribes its own control. Reassign the button and its LED follows — including on a hot reload, mid-show.
+**There is nothing to configure per LED.** A `toggle` mapping on a button that has a lamp lights that lamp and subscribes its own control. Reassign the button and its LED follows — including on a hot reload, mid-show.
 
 ```jsonc
 // This one mapping is the whole story: it mutes Mic 6, lights Mute 7,
 // and subscribes Mic.06.Gain for pushes from the Core.
 {
   "label": "Mic 6 Mute",
-  "midi": { "type": "note_on", "channel": 1, "number": 19 },
+  "midi": { "type": "cc", "channel": 1, "number": 28 },   // Mute 7 sends this
   "qsys": { "type": "toggle", "component": "Mic.06.Gain", "control": "mute" }
 }
 ```
 
-A CC mapping has no lamp to light and is skipped. On a ganged mapping (`link`), the **primary** target drives the LED, so a stereo pair never lights two buttons.
+### Why the lamp isn't in the mapping
 
-> **Removed in 0.2.13:** `feedback.mute_leds`. It was a second array keyed the other way round (component → note), maintained by hand, and neither mapping editor wrote to it — so reassigning a button moved what it *did* while its LED kept showing the old component. The key is now ignored; delete it from your config or leave it, it does nothing either way.
+A MIDImix button is **asymmetric**: it *sends* one address and *lights* on another.
+
+| Button | sends | lamp |
+|---|---|---|
+| Mute 1 | CC ch1 cc22 | Note 1 |
+| Mute 7 | CC ch1 cc28 | Note 19 |
+| Rec Arm 1 | CC ch3 cc22 | Note 3 |
+
+So the lamp cannot be read off a mapping's own MIDI address. It lives on the button instead, in `PHYSICAL_CONTROLS` (`src/main/physical-surface.ts`):
+
+```ts
+{ id: 'M7', label: 'Mute 7', controlType: 'toggle',
+  midi: m('cc', 1, 28),            // what it sends
+  led: { channel: 1, note: 19 } }  // what lights it
+```
+
+The engine joins the two: a toggle mapping's input address identifies the button, and the button supplies the lamp. The button assignment stays the single source of truth, while the note stays pinned to the hardware.
+
+A mapping on a fader or knob has no lamp and is skipped. On a ganged mapping (`link`), the **primary** target drives the LED, so a stereo pair never lights two buttons.
+
+> **Note on `midi.type`:** these CC addresses are what this rig's MIDImix actually sends — it runs a custom MIDI Mix Editor preset. `docs/bugfix-mute-midi-type.md` describes the *factory* layout, where buttons send Note On. Do not "correct" the table to match that doc without capturing `[MIDI RAW]` from the device first; it breaks every button.
+
+> **Removed in 0.2.13:** `feedback.mute_leds`. It was a second array keyed by Q-SYS control, maintained by hand, and neither mapping editor wrote to it — so reassigning a button moved what it *did* while its LED kept showing the old component. The key is now ignored; delete it or leave it, it does nothing either way.
+
+### Checking it
+
+```bash
+node scripts/check-leds.mjs    # what every lamp will show, and any dead mapping
+```
 
 When `enabled: false`, toggle state is tracked locally only — the LED will drift if anything else changes the mute outside the MIDI controller.
 
