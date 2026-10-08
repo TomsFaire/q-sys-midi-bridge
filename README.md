@@ -31,7 +31,7 @@ To package a distributable DMG:
 
 ```bash
 npm run package
-# output: release/MIDI Q-Sys Bridge-0.2.5-arm64.dmg
+# output: release/MIDI Q-Sys Bridge-0.2.11-arm64.dmg
 ```
 
 ---
@@ -258,9 +258,7 @@ The linked leg follows the primary's tracked state rather than toggling independ
 
 `link` is only valid on `component_control` and `toggle` — the other two have no component to inherit from, and a `link` on them is rejected rather than silently ignored.
 
-**In the UI:** tick the **Link** checkbox on any assigned row at `/mappings` and a second row appears underneath for the right leg. Min/Max stay on the primary row and apply to both.
-
-The desktop **Configure Mappings** window can't create or remove a gang — do that on the `/mappings` page. It does carry existing gangs through its own saves untouched, so editing something else there won't quietly un-gang your stereo pairs. Pointing a ganged row at a different component clears its link.
+**In the UI:** tick the **Link** checkbox on any assigned row, in either the browser page at `/mappings` or the desktop **Configure Mappings** window (they share one editor), and a second row appears underneath for the right leg. Min/Max stay on the primary row and apply to both. Pointing a ganged row at a different component clears its link.
 
 **Known limitation:** the mute LED follows the *primary* leg only. If something outside the bridge mutes just the linked leg, the LED won't show it.
 
@@ -421,6 +419,14 @@ The page has the same capabilities as the desktop Configurator: assign
 Q-Sys components/controls to physical MIDImix controls, and **Save** or
 **Save & Apply** (applies live, no restart). Component/control lists are
 fetched live from Q-Sys, same as the desktop version.
+
+### One editor, two windows
+
+The browser page and the desktop Configurator both mount the same editor,
+`assets/shared/mapping-editor.js` (styled by `assets/shared/mapping-editor.css`).
+Adding a new `qsys.*` field means changing it in that one place, not two. The
+**Network** panel (host, UCI port, mappings password, restart) is not part of
+the shared editor and remains desktop-only.
 
 ---
 
