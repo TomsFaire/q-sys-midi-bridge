@@ -33,10 +33,8 @@ function config(): Config {
         qsys: { type: 'toggle', component: 'Mic.01.Gain', control: 'mute' },
       },
     ],
-    feedback: {
-      enabled: true,
-      mute_leds: [{ component: 'Mic.01.Gain', control: 'mute', midi: { channel: 1, note: 1 } }],
-    },
+    // No per-LED config: note 1 lights because the mapping above binds it.
+    feedback: { enabled: true },
   }
 }
 

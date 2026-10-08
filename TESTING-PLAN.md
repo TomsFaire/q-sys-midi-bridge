@@ -416,7 +416,8 @@ rejected without touching `config.json`.
 
 **Mute LED doesn't light**
 - Feedback requires `feedback.enabled: true` in config (it is — confirm it wasn't accidentally edited)
-- The note number in `feedback.mute_leds` must match the note number in the `toggle` mapping for the same channel
+- The lamp is derived from the mapping, so the mapping must be `midi.type: "note_on"` + `qsys.type: "toggle"`. A toggle bound to a CC has no lamp to light.
+- Check the tray activity log for `ChangeGroup feedback active` and the LED count logged on reload
 
 **App won't start / native module error**
 ```bash

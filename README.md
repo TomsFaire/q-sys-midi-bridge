@@ -356,17 +356,25 @@ When `feedback.enabled` is `true`, the bridge subscribes to mute control changes
 
 ```jsonc
 "feedback": {
-  "enabled": true,
-  "mute_leds": [
-    // Each entry maps a Q-Sys mute control to a MIDImix LED
-    { "component": "Mic.01.Gain", "control": "mute", "midi": {"channel": 1, "note": 1} },
-    { "component": "Mic.02.Gain", "control": "mute", "midi": {"channel": 1, "note": 4} }
-    // ... etc
-  ]
+  "enabled": true
 }
 ```
 
-The note numbers in `mute_leds` must match the note numbers in the corresponding `toggle` mappings for the LEDs to track correctly.
+**There is nothing to configure per LED.** The lamps are derived from `mappings`: any mapping with `midi.type: "note_on"` and `qsys.type: "toggle"` lights its own button and subscribes its own control. Reassign the button and its LED follows — including on a hot reload, mid-show.
+
+```jsonc
+// This one mapping is the whole story: it mutes Mic 6, lights Mute 7,
+// and subscribes Mic.06.Gain for pushes from the Core.
+{
+  "label": "Mic 6 Mute",
+  "midi": { "type": "note_on", "channel": 1, "number": 19 },
+  "qsys": { "type": "toggle", "component": "Mic.06.Gain", "control": "mute" }
+}
+```
+
+A CC mapping has no lamp to light and is skipped. On a ganged mapping (`link`), the **primary** target drives the LED, so a stereo pair never lights two buttons.
+
+> **Removed in 0.2.13:** `feedback.mute_leds`. It was a second array keyed the other way round (component → note), maintained by hand, and neither mapping editor wrote to it — so reassigning a button moved what it *did* while its LED kept showing the old component. The key is now ignored; delete it from your config or leave it, it does nothing either way.
 
 When `enabled: false`, toggle state is tracked locally only — the LED will drift if anything else changes the mute outside the MIDI controller.
 

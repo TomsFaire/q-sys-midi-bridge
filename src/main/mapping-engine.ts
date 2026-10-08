@@ -35,6 +35,42 @@ function resolveTargets(q: QsysRef): Target[] {
   ]
 }
 
+/** A lamp derived from a mapping: which control to watch, which note to light. */
+interface DerivedLed {
+  key: string
+  component: string
+  control: string
+  midi: { channel: number; note: number }
+}
+
+/**
+ * The LED map, derived from the mappings themselves.
+ *
+ * A note button bound to a toggle already says both halves: the note is the
+ * lamp, the toggle's primary target is the control whose state it shows. That
+ * makes the button assignment the single source of truth, so reassigning a
+ * button during a show moves its lamp and its Core subscription with it.
+ *
+ * Skipped: CC mappings (a knob has no lamp) and non-toggle targets (a gain has
+ * no on/off to show). The ganged leg follows the primary rather than lighting
+ * a lamp of its own, matching how `execute` drives a linked pair.
+ */
+function deriveLeds(config: Config): DerivedLed[] {
+  const leds: DerivedLed[] = []
+  for (const mapping of config.mappings) {
+    if (mapping.midi.type !== 'note_on' || mapping.qsys.type !== 'toggle') continue
+    const primary = resolveTargets(mapping.qsys)[0]
+    if (!primary.component || !primary.control) continue
+    leds.push({
+      key: keyOf(primary),
+      component: primary.component,
+      control: primary.control,
+      midi: { channel: mapping.midi.channel, note: mapping.midi.number },
+    })
+  }
+  return leds
+}
+
 export class MappingEngine {
   private qrc: QrcClient
   private midi: MidiIO
@@ -62,8 +98,8 @@ export class MappingEngine {
       }
     }
 
-    for (const led of config.feedback.mute_leds) {
-      this.ledMap.set(`${led.component}:${led.control}`, led.midi)
+    for (const led of deriveLeds(config)) {
+      this.ledMap.set(led.key, led.midi)
     }
 
     if (config.feedback.enabled) {
@@ -105,6 +141,12 @@ export class MappingEngine {
 
   /** Hot-reload mappings from a new config without restarting the app. */
   reload(config: Config): void {
+    // A lamp lit under the outgoing assignment has to be darkened here. The
+    // Core only pushes changes to controls we are still watching, so once a
+    // button moves off a component nothing will ever arrive to clear the lamp
+    // it left behind — it would sit lit for the rest of the show.
+    const lit = [...this.ledMap].filter(([key]) => this.toggleState.get(key) === 1)
+
     this.ccMap.clear()
     this.noteMap.clear()
     this.toggleState.clear()
@@ -115,10 +157,19 @@ export class MappingEngine {
       if (mapping.midi.type === 'cc') this.ccMap.set(key, mapping)
       else this.noteMap.set(key, mapping)
     }
-    for (const led of config.feedback.mute_leds) {
-      this.ledMap.set(`${led.component}:${led.control}`, led.midi)
+    for (const led of deriveLeds(config)) {
+      this.ledMap.set(led.key, led.midi)
     }
-    console.log(`[Bridge] Mappings reloaded — ${this.ccMap.size} CC, ${this.noteMap.size} note`)
+
+    // Only lamps whose binding actually moved. One that still shows the same
+    // control is left alone rather than blinked off and repainted by the poll.
+    for (const [key, old] of lit) {
+      if (this.ledMap.get(key)?.note === old.note) continue
+      this.midi.sendNoteOff(old.channel, old.note)
+    }
+
+    this.config = config
+    console.log(`[Bridge] Mappings reloaded — ${this.ccMap.size} CC, ${this.noteMap.size} note, ${this.ledMap.size} LED`)
   }
 
   getRecentActivity(): string[] {
@@ -126,13 +177,24 @@ export class MappingEngine {
   }
 
   async setupChangeGroup(): Promise<void> {
-    if (!this.config.feedback.enabled || this.ledMap.size === 0) return
+    if (!this.config.feedback.enabled) return
+
+    // AddComponentControl accumulates on a group id, so re-subscribing after a
+    // reload would leave the component a button was reassigned away from
+    // watched forever. Destroy first — the group is rebuilt from scratch below.
+    // On the first connect there is no group yet and the Core may reject this;
+    // that is the expected case, not a fault, so it stays out of the error log.
+    await this.qrc.call('ChangeGroup.Destroy', { Id: CHANGE_GROUP_ID })
+      .catch((err) => console.log(`[Bridge] No existing ChangeGroup to destroy (${err.message})`))
+
+    if (this.ledMap.size === 0) return
 
     // Group controls by component for the ChangeGroup subscription
     const byComponent = new Map<string, string[]>()
-    for (const led of this.config.feedback.mute_leds) {
+    for (const led of deriveLeds(this.config)) {
       if (!byComponent.has(led.component)) byComponent.set(led.component, [])
-      byComponent.get(led.component)!.push(led.control)
+      const controls = byComponent.get(led.component)!
+      if (!controls.includes(led.control)) controls.push(led.control)
     }
 
     for (const [component, controls] of byComponent) {

@@ -56,17 +56,15 @@ function configWith(mappings: Mapping[]): Config {
     qsys: { host: '', port: 1710 },
     midi: { deviceName: '' },
     mappings,
-    feedback: { enabled: false, mute_leds: [] },
+    feedback: { enabled: false },
   }
 }
 
 /** Builds an engine over `mappings` and returns the recorders. */
-function engineFor(mappings: Mapping[], muteLeds: Config['feedback']['mute_leds'] = []) {
+function engineFor(mappings: Mapping[]) {
   const { qrc, calls } = fakeQrc()
   const { midi, leds } = fakeMidi()
-  const config = configWith(mappings)
-  config.feedback.mute_leds = muteLeds
-  const engine = new MappingEngine(qrc, midi, config)
+  const engine = new MappingEngine(qrc, midi, configWith(mappings))
   return { engine, calls, leds }
 }
 
@@ -256,20 +254,19 @@ test('a linked toggle sharing a component batches both legs into one call', asyn
 })
 
 test('a linked toggle drives the LED bound to its primary leg', async () => {
-  const { engine, leds } = engineFor(
-    [{
-      midi: { type: 'cc', channel: 1, number: 22 },
-      qsys: {
-        type: 'toggle',
-        component: 'Dante.In.9.Gain',
-        control: 'mute',
-        link: { component: 'Dante.In.10.Gain' },
-      },
-    }],
-    [{ component: 'Dante.In.9.Gain', control: 'mute', midi: { channel: 1, note: 1 } }],
-  )
+  // The button lights once, for the primary. The ganged leg moves with it but
+  // owns no lamp of its own, so a stereo pair never lights two buttons.
+  const { engine, leds } = engineFor([{
+    midi: { type: 'note_on', channel: 1, number: 1 },
+    qsys: {
+      type: 'toggle',
+      component: 'Dante.In.9.Gain',
+      control: 'mute',
+      link: { component: 'Dante.In.10.Gain' },
+    },
+  }])
 
-  engine.handleCC(1, 22, 127)
+  engine.handleNoteOn(1, 1)
   await flush()
 
   assert.deepEqual(leds, [{ kind: 'on', channel: 1, note: 1 }])

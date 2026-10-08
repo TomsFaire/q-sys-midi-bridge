@@ -43,6 +43,13 @@ export interface Mapping {
   qsys: QsysRef
 }
 
+/**
+ * @deprecated No longer read. LED feedback is derived from `mappings` — a note
+ * button bound to a toggle lights its own lamp. This array was maintained by
+ * hand and keyed the other way round (component → note), so reassigning a
+ * button in either editor left its lamp pointing at the old component. The
+ * type survives so existing configs still parse; the key is ignored.
+ */
 export interface FeedbackLED {
   component: string
   control: string
@@ -55,7 +62,9 @@ export interface Config {
   qsys: { host: string; port: number; username?: string; password?: string }
   midi: { deviceName: string }
   mappings: Mapping[]
-  feedback: { enabled: boolean; mute_leds: FeedbackLED[] }
+  // `enabled` is the master switch for LED feedback. `mute_leds` is ignored —
+  // see FeedbackLED. Optional so a config may simply omit it.
+  feedback: { enabled: boolean; mute_leds?: FeedbackLED[] }
   // UCI web server (serves foh-uci.html + relays browser WS to the Core).
   // Defaults when absent: enabled: true, port: 3001.
   uci?: { enabled?: boolean; port?: number; mappingsPasswordHash?: string }
