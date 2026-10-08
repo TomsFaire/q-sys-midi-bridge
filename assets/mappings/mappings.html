@@ -79,7 +79,16 @@ async function api(path, opts) {
   const res = await fetch(path, { credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, ...opts })
   if (res.status === 401) { showLogin(); throw new Error('Session expired — please sign in again') }
   const body = await res.json().catch(() => ({}))
-  if (!res.ok) throw new Error(body.error || ('HTTP ' + res.status))
+  if (!res.ok) {
+    // Mappings the editor carries through untouched are re-validated on save,
+    // so a pre-existing malformed entry rejects the whole save. Without the
+    // per-entry reasons that is a dead end — there is no row to blame and no
+    // way to fix it from this page.
+    const why = Array.isArray(body.details)
+      ? ' — ' + body.details.map(d => `#${d.index}: ${d.reason}`).join('; ')
+      : ''
+    throw new Error((body.error || ('HTTP ' + res.status)) + why)
+  }
   return body
 }
 

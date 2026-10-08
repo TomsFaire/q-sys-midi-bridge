@@ -591,6 +591,23 @@ test('refreshComponents keeps unsaved edits and picks up the new component list'
   assert.equal(out[0].qsys.control, 'gain')
 })
 
+test('refreshComponents keeps mappings the editor cannot show', async () => {
+  // refreshComponents rebuilds the editor around the LIVE assignments map,
+  // which skips the seeding loop that collects unshowable mappings. Without
+  // carrying them through the rebuild, one click of Refresh Q-Sys would delete
+  // every snapshot in the user's config — the exact bug this fix exists for.
+  const snap = {
+    label: 'Snap', midi: { type: 'note_on', channel: 1, number: 25 },
+    qsys: { type: 'snapshot', bank: 1, slot: 3 },
+  }
+  const ed = await mountWith({
+    loadEditorState: async () => ({ physicalControls: [KNOB_A1], mappings: [snap] }),
+  })
+  await ed.refreshComponents()
+  const out = JSON.parse(JSON.stringify(ed.getMappings()))
+  assert.deepEqual(out, [snap], 'the snapshot must survive a refresh, not just the initial load')
+})
+
 test('refreshComponents does not re-read the stored mappings', async () => {
   let loads = 0
   const ed = await mountWith({ loadEditorState: async () => { loads++; return { physicalControls: [KNOB_A1], mappings: [] } } })

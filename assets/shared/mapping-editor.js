@@ -27,7 +27,11 @@
     return qsys
   }
 
-  function buildMappings(physicalControls, assignments) {
+  // `unrepresented` holds mappings no row can show — snapshots, named
+  // controls, and entries whose MIDI address matches no physical control.
+  // They are appended verbatim, after the rows, so a save preserves them
+  // instead of deleting them.
+  function buildMappings(physicalControls, assignments, unrepresented) {
     const mappings = []
     for (const pc of physicalControls) {
       const a = assignments.get(pc.id)
@@ -39,7 +43,7 @@
             min: a.min ?? -100, max: a.max ?? 10 }
       mappings.push({ label: a.label || pc.label, midi: { ...pc.midi }, qsys: withLink(a, qsys) })
     }
-    return mappings
+    return mappings.concat(unrepresented || [])
   }
 
   // Repointing the primary drops any gang: the old partner is unrelated to
@@ -87,10 +91,29 @@
     // from an edit of an existing name.
     const committedCtrl = new Map()
 
+    // Mappings this editor cannot show as a row. Saving rewrites the whole
+    // array, so anything missing from buildMappings' output is deleted from
+    // the user's config — these are carried through untouched instead. A
+    // rebuild (refreshComponents) skips the seeding loop below, so the caller
+    // hands them back the same way it hands back `assignments`.
+    // Copied, not shared: the only caller that passes this also passes
+    // `assignments`, which disables the push below — but a future caller that
+    // passed it without `assignments` would otherwise append duplicates on
+    // every rebuild.
+    const unrepresented = (opts.unrepresented || []).slice()
+
     for (const mObj of opts.assignments ? [] : (opts.mappings || [])) {
       const pc = physicalControls.find(p =>
         p.midi.type === mObj.midi.type && p.midi.channel === mObj.midi.channel && p.midi.number === mObj.midi.number)
-      if (!pc) continue
+      // No row can show it: no physical control carries that MIDI address,
+      // the type has no component to put in the row's fields, or the fields a
+      // row needs are missing. The `?.` matters — an entry with no qsys at all
+      // would otherwise throw here and blank the whole editor.
+      const q = mObj.qsys
+      if (!pc || (q?.type !== 'component_control' && q?.type !== 'toggle') || !q.component || !q.control) {
+        unrepresented.push(mObj)
+        continue
+      }
       assignments.set(pc.id, {
         component: mObj.qsys.component ?? '',
         controlName: mObj.qsys.control ?? '',
@@ -396,7 +419,7 @@
 
     return {
       root,
-      __internals: { assignments, view, ctrlCache, renderTable, renderRow, renderLinkRow, populateDatalist },
+      __internals: { assignments, unrepresented, view, ctrlCache, renderTable, renderRow, renderLinkRow, populateDatalist },
     }
   }
 
@@ -532,12 +555,12 @@
     // edit. Falls back to a full load if nothing has loaded yet.
     async function refreshComponents() {
       if (!editor || loadFailed) return load()
-      install({ assignments: editor.__internals.assignments }, await discover())
+      install({ assignments: editor.__internals.assignments, unrepresented: editor.__internals.unrepresented }, await discover())
     }
 
     function getMappings() {
       if (loadFailed) throw new Error('Mappings failed to load, so there is nothing safe to read. Reload first.')
-      return buildMappings(physicalControls, editor.__internals.assignments)
+      return buildMappings(physicalControls, editor.__internals.assignments, editor.__internals.unrepresented)
     }
 
     async function send(method, busy, done) {
