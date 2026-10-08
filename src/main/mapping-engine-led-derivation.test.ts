@@ -61,10 +61,16 @@ const push = (qrc: FakeQrc, component: string, control: string, value: number) =
     Changes: [{ Component: component, Name: control, Value: value }],
   })
 
-/** Mute 7 on the MIDImix. */
-const MUTE_7 = { type: 'note_on', channel: 1, number: 19 } as const
-/** Rec Arm 1 on the MIDImix. */
-const REC_ARM_1 = { type: 'note_on', channel: 1, number: 3 } as const
+/**
+ * Mute 7 as the hardware addresses it: the press arrives as CC ch1 cc28, and
+ * the lamp lights on note 19. The two are different, so the lamp comes from
+ * the physical control, not from the mapping's own MIDI address.
+ */
+const MUTE_7 = { type: 'cc', channel: 1, number: 28 } as const
+const MUTE_7_LAMP = 19
+/** Rec Arm 1: press arrives as CC ch3 cc22, lamp is note 3. */
+const REC_ARM_1 = { type: 'cc', channel: 3, number: 22 } as const
+const REC_ARM_1_LAMP = 3
 
 const toggle = (midi: Mapping['midi'], component: string, link?: Mapping['qsys']['link']): Mapping => ({
   midi,
@@ -78,7 +84,7 @@ test('the LED lights for the component its own button is mapped to', () => {
   // light Mute 7, with no feedback.mute_leds entry anywhere.
   const { qrc, midi } = build([toggle(MUTE_7, 'Mic.06.Gain')])
   push(qrc, 'Mic.06.Gain', 'mute', 1)
-  assert.deepEqual(midi.sent, ['on 1:19'])
+  assert.deepEqual(midi.sent, [`on 1:${MUTE_7_LAMP}`])
 })
 
 test('a component no button is mapped to drives no LED', () => {
@@ -95,14 +101,14 @@ test('a reassigned component lights its new button', () => {
     toggle(REC_ARM_1, 'ZoomRX.Gain'),
   ])
   push(qrc, 'ZoomRX.Gain', 'mute', 1)
-  assert.deepEqual(midi.sent, ['on 1:3'])
+  assert.deepEqual(midi.sent, [`on 1:${REC_ARM_1_LAMP}`])
 })
 
 test('clearing a mute on the Core clears the derived LED', () => {
   const { qrc, midi } = build([toggle(MUTE_7, 'Mic.06.Gain')])
   push(qrc, 'Mic.06.Gain', 'mute', 1)
   push(qrc, 'Mic.06.Gain', 'mute', 0)
-  assert.deepEqual(midi.sent, ['on 1:19', 'off 1:19'])
+  assert.deepEqual(midi.sent, [`on 1:${MUTE_7_LAMP}`, `off 1:${MUTE_7_LAMP}`])
 })
 
 test('a ganged toggle lights its LED from the primary target', () => {
@@ -112,7 +118,7 @@ test('a ganged toggle lights its LED from the primary target', () => {
   ])
   push(qrc, 'Styb.Gain', 'mute', 1)
   push(qrc, 'Styb.Gain.R', 'mute', 1)
-  assert.deepEqual(midi.sent, ['on 1:19'])
+  assert.deepEqual(midi.sent, [`on 1:${MUTE_7_LAMP}`])
 })
 
 test('a fader mapping contributes no LED', () => {
@@ -132,7 +138,7 @@ test('reassigning a button mid-show moves its LED without a restart', () => {
   midi.sent.length = 0
 
   push(qrc, 'Mic.06.Gain', 'mute', 1)
-  assert.deepEqual(midi.sent, ['on 1:19'])
+  assert.deepEqual(midi.sent, [`on 1:${MUTE_7_LAMP}`])
 })
 
 test('reload darkens a lamp whose button no longer owns it', () => {
@@ -140,10 +146,10 @@ test('reload darkens a lamp whose button no longer owns it', () => {
   // the Core will never push a Zoom change to turn it off again.
   const { qrc, midi, engine } = build([toggle(MUTE_7, 'ZoomRX.Gain')])
   push(qrc, 'ZoomRX.Gain', 'mute', 1)
-  assert.deepEqual(midi.sent, ['on 1:19'])
+  assert.deepEqual(midi.sent, [`on 1:${MUTE_7_LAMP}`])
 
   engine.reload(configWith([toggle(MUTE_7, 'Mic.06.Gain')]))
-  assert.deepEqual(midi.sent, ['on 1:19', 'off 1:19'])
+  assert.deepEqual(midi.sent, [`on 1:${MUTE_7_LAMP}`, `off 1:${MUTE_7_LAMP}`])
 })
 
 // ── ChangeGroup subscription ─────────────────────────────────────────────────

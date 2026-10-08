@@ -29,7 +29,8 @@ function config(): Config {
     mappings: [
       {
         label: 'Mic 1 Mute',
-        midi: { type: 'note_on', channel: 1, number: 1 },
+        // Mute 1: the press arrives as CC ch1 cc22, its lamp is note 1.
+        midi: { type: 'cc', channel: 1, number: 22 },
         qsys: { type: 'toggle', component: 'Mic.01.Gain', control: 'mute' },
       },
     ],
@@ -75,7 +76,7 @@ test('a button press after an out-of-band mute toggles from the Core state, not 
   // press unmutes, which is what the operator sees on the strip.
   const { qrc, midi, engine } = build()
   push(qrc, 1)
-  engine.handleNoteOn(1, 1)
+  engine.handleCC(1, 22, 127)
   await new Promise((r) => setImmediate(r))
 
   const set = qrc.calls.filter((c) => c.method === 'Component.Set')
@@ -94,7 +95,7 @@ test('a press while the Core is disconnected is reported, not swallowed', async 
   const { qrc, engine } = build()
   qrc.isConnected = false
 
-  engine.handleNoteOn(1, 1)
+  engine.handleCC(1, 22, 127)
   await new Promise((r) => setImmediate(r))
 
   assert.match(engine.getRecentActivity()[0] ?? '', /not connected/i)
@@ -106,7 +107,7 @@ test('a press on an unmapped button is reported, not swallowed', async () => {
   // mapping, which is a config problem rather than a connection one.
   const { engine } = build()
 
-  engine.handleNoteOn(1, 99)
+  engine.handleCC(1, 29, 127)
   await new Promise((r) => setImmediate(r))
 
   assert.match(engine.getRecentActivity()[0] ?? '', /no mapping/i)

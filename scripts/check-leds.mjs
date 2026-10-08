@@ -25,11 +25,14 @@ const USER_CONFIG = path.join(
   'Library/Application Support/midi-qsys-bridge/config.json',
 )
 
-/** The MIDImix lamps, by note number. Everything else is a button with no LED. */
-const BUTTONS = new Map([
-  ...[1, 4, 7, 10, 13, 16, 19, 22].map((n, i) => [n, `Mute ${i + 1}`]),
-  ...[3, 6, 9, 12, 15, 18, 21, 24].map((n, i) => [n, `Rec Arm ${i + 1}`]),
-])
+/**
+ * The physical surface, loaded from the build so this never drifts from what
+ * the engine uses. A button SENDS a CC and LIGHTS on a different note, so a
+ * mapping is matched by its input address and the lamp read off the button.
+ */
+const { PHYSICAL_CONTROLS } = await import('../dist/main/physical-surface.js')
+const addr = (m) => `${m.type}:${m.channel}:${m.number}`
+const BY_INPUT = new Map(PHYSICAL_CONTROLS.map((pc) => [addr(pc.midi), pc]))
 
 /** Matches `stripComments` in src/main/config.ts. */
 const parseJsonc = (text) =>
@@ -64,15 +67,21 @@ function reportLamps(configPath) {
   for (const m of config.mappings ?? []) {
     const { midi, qsys } = m
     if (qsys?.type !== 'toggle') continue
-    if (midi?.type !== 'note_on') {
-      noLamp.push(`${m.label ?? '(unlabelled)'} — bound to ${midi?.type} ${midi?.number}, not a note`)
+    const pc = BY_INPUT.get(addr(midi))
+    if (!pc) {
+      noLamp.push(
+        `${m.label ?? '(unlabelled)'} — ${midi?.type} ch${midi?.channel} ${midi?.number} ` +
+        `matches no button on this surface, so it can neither fire nor light`)
+      continue
+    }
+    if (!pc.led) {
+      noLamp.push(`${m.label ?? '(unlabelled)'} — ${pc.label} has no lamp`)
       continue
     }
     lamps.push({
-      button: BUTTONS.get(midi.number) ?? `note ${midi.number}`,
-      note: midi.number,
+      button: pc.label,
+      note: pc.led.note,
       target: `${qsys.component}:${qsys.control}`,
-      label: m.label ?? '',
     })
   }
 
@@ -80,12 +89,12 @@ function reportLamps(configPath) {
     console.log('  feedback.enabled is false — every lamp is suppressed.')
   }
   for (const l of lamps.sort((a, b) => a.note - b.note)) {
-    console.log(`  ${l.button.padEnd(11)} note ${String(l.note).padStart(2)}  shows  ${l.target}`)
+    console.log(`  ${l.button.padEnd(11)} lamp note ${String(l.note).padStart(2)}  shows  ${l.target}`)
   }
-  if (!lamps.length) console.log('  no note_on toggle mappings — nothing will light')
+  if (!lamps.length) console.log('  no toggle mappings on a lamped button — nothing will light')
 
   if (noLamp.length) {
-    console.log('\nNO LAMP  (a toggle on a knob has no LED to light)')
+    console.log('\nNO LAMP / DEAD  (will not light, and may not fire at all)')
     for (const n of noLamp) console.log(`  ${n}`)
   }
 

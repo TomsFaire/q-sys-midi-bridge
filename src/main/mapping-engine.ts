@@ -9,6 +9,7 @@
 import { QrcClient } from './qrc-client.js'
 import { MidiIO } from './midi-io.js'
 import type { Config, Mapping, QsysRef } from './config.js'
+import { PHYSICAL_CONTROLS } from './physical-surface.js'
 
 /** One resolved Q-SYS write target. */
 interface Target { component: string; control: string }
@@ -43,29 +44,53 @@ interface DerivedLed {
   midi: { channel: number; note: number }
 }
 
+/** Button labels by MIDI input address, for naming one in the activity log. */
+const BUTTON_BY_ADDRESS = new Map(
+  PHYSICAL_CONTROLS.filter((pc) => pc.controlType === 'toggle').map((pc) => [
+    `${pc.midi.type}:${pc.midi.channel}:${pc.midi.number}`,
+    pc.label,
+  ]),
+)
+
+/** Every physical control that owns a lamp, by its MIDI input address. */
+const LAMP_BY_ADDRESS = new Map(
+  PHYSICAL_CONTROLS.filter((pc) => pc.led).map((pc) => [
+    `${pc.midi.type}:${pc.midi.channel}:${pc.midi.number}`,
+    pc.led!,
+  ]),
+)
+
 /**
  * The LED map, derived from the mappings themselves.
  *
- * A note button bound to a toggle already says both halves: the note is the
- * lamp, the toggle's primary target is the control whose state it shows. That
- * makes the button assignment the single source of truth, so reassigning a
- * button during a show moves its lamp and its Core subscription with it.
+ * A mapping says which button is involved (its MIDI address) and which Q-SYS
+ * control it drives. The lamp comes from the button: on this surface a button
+ * SENDS a CC but LIGHTS on a Note On at a different number, so the note cannot
+ * be read off the mapping — it is a fixed property of the hardware, held in
+ * PHYSICAL_CONTROLS. Joining the two makes the button assignment the single
+ * source of truth, so reassigning a button during a show moves its lamp and
+ * its Core subscription with it.
  *
- * Skipped: CC mappings (a knob has no lamp) and non-toggle targets (a gain has
- * no on/off to show). The ganged leg follows the primary rather than lighting
- * a lamp of its own, matching how `execute` drives a linked pair.
+ * Skipped: non-toggle targets (a gain has no on/off to show) and any address
+ * with no lamp behind it (faders, knobs). The ganged leg follows the primary
+ * rather than lighting a lamp of its own, matching how `execute` drives a
+ * linked pair.
  */
 function deriveLeds(config: Config): DerivedLed[] {
   const leds: DerivedLed[] = []
   for (const mapping of config.mappings) {
-    if (mapping.midi.type !== 'note_on' || mapping.qsys.type !== 'toggle') continue
+    if (mapping.qsys.type !== 'toggle') continue
+    const lamp = LAMP_BY_ADDRESS.get(
+      `${mapping.midi.type}:${mapping.midi.channel}:${mapping.midi.number}`,
+    )
+    if (!lamp) continue
     const primary = resolveTargets(mapping.qsys)[0]
     if (!primary.component || !primary.control) continue
     leds.push({
       key: keyOf(primary),
       component: primary.component,
       control: primary.control,
-      midi: { channel: mapping.midi.channel, note: mapping.midi.number },
+      midi: { channel: lamp.channel, note: lamp.note },
     })
   }
   return leds
@@ -109,7 +134,13 @@ export class MappingEngine {
 
   handleCC(channel: number, cc: number, value: number): void {
     const mapping = this.ccMap.get(`${channel}:${cc}`)
-    if (!mapping) return
+    if (!mapping) {
+      // Only for a button. An unmapped fader or knob streams CC continuously
+      // and would bury the log under a single sweep.
+      const button = BUTTON_BY_ADDRESS.get(`cc:${channel}:${cc}`)
+      if (button && value > 0) this.log(`${button} — no mapping for this button`)
+      return
+    }
     // Toggle buttons (mutes, rec arm) send CC 127 on press and CC 0 on release.
     // Ignore the 0 so we don't double-fire and immediately undo the toggle.
     if (mapping.qsys.type === 'toggle' && value === 0) return

@@ -256,8 +256,9 @@ test('a linked toggle sharing a component batches both legs into one call', asyn
 test('a linked toggle drives the LED bound to its primary leg', async () => {
   // The button lights once, for the primary. The ganged leg moves with it but
   // owns no lamp of its own, so a stereo pair never lights two buttons.
+  // Mute 1: the press arrives as CC ch1 cc22, its lamp is note 1.
   const { engine, leds } = engineFor([{
-    midi: { type: 'note_on', channel: 1, number: 1 },
+    midi: { type: 'cc', channel: 1, number: 22 },
     qsys: {
       type: 'toggle',
       component: 'Dante.In.9.Gain',
@@ -266,7 +267,7 @@ test('a linked toggle drives the LED bound to its primary leg', async () => {
     },
   }])
 
-  engine.handleNoteOn(1, 1)
+  engine.handleCC(1, 22, 127)
   await flush()
 
   assert.deepEqual(leds, [{ kind: 'on', channel: 1, note: 1 }])
