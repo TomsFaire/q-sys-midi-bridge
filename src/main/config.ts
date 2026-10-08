@@ -141,4 +141,16 @@ export function findConfigPath(): string {
   return path.join(app.getPath('userData'), 'config.json')
 }
 
+/**
+ * Where saved shows live, beside config.json.
+ *
+ * electron-builder strips productName from the packaged package.json, so
+ * app.getName() is "midi-qsys-bridge" in both a packaged build and `npm
+ * start` — one userData directory, and a show saved in development is
+ * visible to the installed app.
+ */
+export function getShowsDir(): string {
+  return path.join(app.getPath('userData'), 'shows')
+}
+
 export { stripComments }

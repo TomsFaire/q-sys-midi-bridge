@@ -7,7 +7,9 @@
 
 import { app, Tray, Menu, nativeImage, shell, clipboard, powerSaveBlocker } from 'electron'
 import path from 'node:path'
-import { loadConfig, getConfigPath, findConfigPath, seedUserConfig } from './config.js'
+import { loadConfig, getConfigPath, findConfigPath, getShowsDir, seedUserConfig } from './config.js'
+import { listShows, writeShow, recallShow, listAutoBackups, autoDirFor } from './show-service.js'
+import { loadMappings } from './mapping-service.js'
 import { Bridge } from './bridge.js'
 import { UciServer } from './uci-server.js'
 import { MappingsHttpHandler } from './mappings-http.js'
@@ -60,6 +62,59 @@ app.whenReady().then(async () => {
   const hasHost = !!config?.qsys?.host
   const bridge = config && hasHost ? new Bridge(config) : null
 
+  /** Hot-reload after anything rewrites the config. Shared by both editors and the tray. */
+  const onReload = async () => { await bridge?.reloadConfig() }
+
+  const showsDir = getShowsDir()
+
+  // The show list is read from disk only on demand — never from buildMenu(),
+  // which also runs on a 3s timer. A readdir plus a parse per show every three
+  // seconds, forever, on a machine whose whole job is not to glitch during a
+  // show, is not a trade worth making.
+  let cachedShows = listShows(showsDir)
+  let cachedBackups = listAutoBackups(autoDirFor(showsDir))
+  let showError: string | null = null
+  let menuOpen = false
+
+  function reloadShowCache(): void {
+    try {
+      cachedShows = listShows(showsDir)
+      cachedBackups = listAutoBackups(autoDirFor(showsDir))
+    } catch (err) {
+      showError = (err as Error).message
+    }
+  }
+
+  /** Recalls from a directory, then refreshes the cache and tray. Errors land in the menu. */
+  function recallFrom(dir: string, id: string): void {
+    showError = null
+    recallShow(dir, id, findConfigPath(), onReload)
+      .then((r) => { showError = `Recalled "${r.name}" — ${r.count} mappings. Re-sync faders.` })
+      .catch((err) => { showError = (err as Error).message })
+      .finally(() => { reloadShowCache(); refreshTray() })
+  }
+
+  const recallFromTray = (id: string) => recallFrom(showsDir, id)
+  /** Undo: a backup is an ordinary show file, so this is the same operation. */
+  const recallFromTray__auto = (id: string) => recallFrom(autoDirFor(showsDir), id)
+
+  /**
+   * Saves the live mappings under a generated name. The tray has no text
+   * input and this app uses no dialogs; renaming happens on the mappings page.
+   */
+  function saveShowFromTray(): void {
+    showError = null
+    try {
+      const stamp = new Date().toISOString().slice(0, 16).replace('T', ' ')
+      const saved = writeShow(showsDir, `Show ${stamp}`, loadMappings(findConfigPath()))
+      showError = `Saved "${saved.name}" — ${saved.count} mappings`
+    } catch (err) {
+      showError = (err as Error).message
+    }
+    reloadShowCache()
+    refreshTray()
+  }
+
   // Populated only when the Core has Access Control enabled; blank fields
   // mean "open Core" and every consumer skips the logon.
   const qsysCredentials = {
@@ -77,7 +132,8 @@ app.whenReady().then(async () => {
     const mappingsHandler = new MappingsHttpHandler(
       findConfigPath(),
       mappingsHtmlPath,
-      async () => { await bridge?.reloadConfig() },
+      onReload,
+      getShowsDir(),
     )
     uciServer = new UciServer()
     uciServer.on('error', (err: Error) => {
@@ -171,6 +227,38 @@ app.whenReady().then(async () => {
       items.push({ type: 'separator' })
     }
 
+    // Undo sits at the top level, not inside the submenu: a mis-recall is
+    // found under time pressure, and the fix should not need navigating to.
+    const lastBackup = cachedBackups[0]
+    if (lastBackup) {
+      items.push(
+        {
+          label: `Undo recall → "${lastBackup.name.replace(/^before /, '')}"`,
+          click: () => recallFromTray__auto(lastBackup.id),
+        },
+        { type: 'separator' },
+      )
+    }
+
+    const showItems: Electron.MenuItemConstructorOptions[] = cachedShows.length
+      ? cachedShows.map((s) => ({
+          label: `${s.name}  (${s.count})`,
+          click: () => recallFromTray(s.id),
+        }))
+      : [{ label: 'No shows saved yet', enabled: false }]
+
+    items.push({
+      label: 'Shows',
+      submenu: [
+        ...showItems,
+        { type: 'separator' },
+        { label: 'Save Current as Show', click: () => saveShowFromTray() },
+        { label: 'Open Shows Folder', click: () => { shell.openPath(showsDir) } },
+      ],
+    })
+    if (showError) items.push({ label: `  ${showError.slice(0, 70)}`, enabled: false })
+    items.push({ type: 'separator' })
+
     items.push(
       {
         label: 'Configure Mappings…',
@@ -199,14 +287,21 @@ app.whenReady().then(async () => {
   function refreshTray(): void {
     const connected = (bridge?.qrcConnected ?? false) && (bridge?.midiConnected ?? false)
     tray.setImage(makeIcon(connected))
-    tray.setContextMenu(buildMenu())
+    const menu = buildMenu()
+    // Track whether a menu is on screen so the 3s timer cannot swap it out
+    // from under the cursor mid-hover.
+    menu.on('menu-will-show', () => { menuOpen = true })
+    menu.on('menu-will-close', () => { menuOpen = false })
+    tray.setContextMenu(menu)
   }
 
   tray.setContextMenu(buildMenu())
 
-  // Rebuild menu on click so status is always fresh
-  tray.on('click', refreshTray)
-  tray.on('right-click', refreshTray)
+  // Rebuild menu on click so status is always fresh. This is also the only
+  // place the show list is re-read from disk.
+  const refreshFromDisk = () => { reloadShowCache(); refreshTray() }
+  tray.on('click', refreshFromDisk)
+  tray.on('right-click', refreshFromDisk)
 
   // Rebuild whenever bridge status changes
   bridge?.on('status-change', refreshTray)
@@ -217,8 +312,11 @@ app.whenReady().then(async () => {
   uciServer?.on('client-connected', refreshTray)
   uciServer?.on('client-disconnected', refreshTray)
 
-  // Also refresh on a timer in case the tray menu is already open
-  setInterval(refreshTray, 3000)
+  // Also refresh on a timer in case the tray menu is already open. Suppressed
+  // while a menu is actually open: setContextMenu replaces the live menu, so a
+  // rebuild under the cursor can move the item being hovered — and with no
+  // confirmation step, that is a silent mis-recall.
+  setInterval(() => { if (!menuOpen) refreshTray() }, 3000)
 
   let powerSaveBlockerId: number | null = null
 
