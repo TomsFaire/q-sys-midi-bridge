@@ -15,6 +15,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import type { Mapping } from './config.js'
+import { loadMappings, patchConfig, validateMappings } from './mapping-service.js'
 
 /** On-disk shape. `mappings` is named to match a config so loadMappings() reads it. */
 export interface Show {
@@ -34,6 +35,8 @@ export interface ShowSummary {
 
 const SCHEMA = 1 as const
 const MAX_SLUG = 64
+/** Backups kept per shows directory. Twenty is a long night. */
+const KEEP_BACKUPS = 20
 
 /**
  * A display name reduced to a safe filename stem.
@@ -156,4 +159,73 @@ export function deleteShow(showsDir: string, id: string): void {
   const file = showPath(showsDir, id)
   if (!fs.existsSync(file)) throw new Error(`Show "${id}" not found`)
   fs.unlinkSync(file)
+}
+
+// ── Recall ───────────────────────────────────────────────────────────────────
+
+/**
+ * Where pre-recall backups live. A subdirectory rather than a suffix, so the
+ * show list stays the operator's own shows and backups never clutter it.
+ */
+export function autoDirFor(showsDir: string): string {
+  return path.join(showsDir, '_auto')
+}
+
+/** Backups, newest first. They are ordinary show files, so undo is just a recall. */
+export function listAutoBackups(autoDir: string): Array<ShowSummary & { mappings: Mapping[] }> {
+  return listShows(autoDir).map((s) => ({ ...s, mappings: readShow(autoDir, s.id).mappings }))
+}
+
+/** Keeps the newest `keep` backups. A busy night should not fill the disk. */
+export function pruneAutoBackups(autoDir: string, keep: number): void {
+  for (const stale of listShows(autoDir).slice(keep)) {
+    try { deleteShow(autoDir, stale.id) } catch { /* already gone */ }
+  }
+}
+
+/**
+ * Applies a saved show to the live config, without a restart.
+ *
+ * The ordering is the safety story:
+ *   1. read and validate      — a bad show is refused with nothing written
+ *   2. back up what is live   — and abort if that fails, because a recall
+ *                               that cannot be undone is the irreversible
+ *                               thing the backup exists to prevent
+ *   3. one atomic write       — mappings and activeShow together
+ *   4. reload                 — swaps the maps in memory; no restart, and
+ *                               no reconnect, since a show never touches qsys
+ */
+export async function recallShow(
+  showsDir: string,
+  id: string,
+  configFilePath: string,
+  onReload?: () => Promise<void>,
+): Promise<{ id: string; name: string; count: number; backupId: string }> {
+  const show = readShow(showsDir, id)
+
+  const check = validateMappings(show.mappings)
+  if (!check.valid) {
+    const detail = check.errors.map((e) => `#${e.index}: ${e.reason}`).join('; ')
+    throw new Error(`Show "${show.name}" is not valid and was not applied — ${detail}`)
+  }
+
+  const autoDir = autoDirFor(showsDir)
+  let backupId: string
+  try {
+    const live = loadMappings(configFilePath)
+    backupId = writeShow(autoDir, `before ${show.name}`, live).id
+    pruneAutoBackups(autoDir, KEEP_BACKUPS)
+  } catch (err) {
+    throw new Error(
+      `Could not back up the current mappings, so "${show.name}" was not applied: ${(err as Error).message}`,
+    )
+  }
+
+  patchConfig(configFilePath, {
+    mappings: check.mappings,
+    activeShow: { id, name: show.name, appliedAt: new Date().toISOString() },
+  })
+  if (onReload) await onReload()
+
+  return { id, name: show.name, count: check.mappings.length, backupId }
 }

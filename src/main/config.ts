@@ -68,6 +68,11 @@ export interface Config {
   // UCI web server (serves foh-uci.html + relays browser WS to the Core).
   // Defaults when absent: enabled: true, port: 3001.
   uci?: { enabled?: boolean; port?: number; mappingsPasswordHash?: string }
+  // Which saved show was last recalled. Written by the recall, and left alone
+  // by an ordinary mapping save — so an edit after a recall leaves this
+  // pointing at the show the mappings came from, which is what lets the UI
+  // say "Gala 2026 (edited)" rather than claiming the surface is untouched.
+  activeShow?: { id: string; name: string; appliedAt: string }
 }
 
 export function isValidPort(value: unknown): value is number {
