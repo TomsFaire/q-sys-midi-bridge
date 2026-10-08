@@ -9,6 +9,7 @@
 import { QrcClient } from './qrc-client.js'
 import { MidiIO } from './midi-io.js'
 import type { Config, Mapping, QsysRef } from './config.js'
+import { PHYSICAL_CONTROLS } from './physical-surface.js'
 
 /** One resolved Q-SYS write target. */
 interface Target { component: string; control: string }
@@ -33,6 +34,66 @@ function resolveTargets(q: QsysRef): Target[] {
       control: q.link.control ?? primary.control,
     },
   ]
+}
+
+/** A lamp derived from a mapping: which control to watch, which note to light. */
+interface DerivedLed {
+  key: string
+  component: string
+  control: string
+  midi: { channel: number; note: number }
+}
+
+/** Button labels by MIDI input address, for naming one in the activity log. */
+const BUTTON_BY_ADDRESS = new Map(
+  PHYSICAL_CONTROLS.filter((pc) => pc.controlType === 'toggle').map((pc) => [
+    `${pc.midi.type}:${pc.midi.channel}:${pc.midi.number}`,
+    pc.label,
+  ]),
+)
+
+/** Every physical control that owns a lamp, by its MIDI input address. */
+const LAMP_BY_ADDRESS = new Map(
+  PHYSICAL_CONTROLS.filter((pc) => pc.led).map((pc) => [
+    `${pc.midi.type}:${pc.midi.channel}:${pc.midi.number}`,
+    pc.led!,
+  ]),
+)
+
+/**
+ * The LED map, derived from the mappings themselves.
+ *
+ * A mapping says which button is involved (its MIDI address) and which Q-SYS
+ * control it drives. The lamp comes from the button: on this surface a button
+ * SENDS a CC but LIGHTS on a Note On at a different number, so the note cannot
+ * be read off the mapping — it is a fixed property of the hardware, held in
+ * PHYSICAL_CONTROLS. Joining the two makes the button assignment the single
+ * source of truth, so reassigning a button during a show moves its lamp and
+ * its Core subscription with it.
+ *
+ * Skipped: non-toggle targets (a gain has no on/off to show) and any address
+ * with no lamp behind it (faders, knobs). The ganged leg follows the primary
+ * rather than lighting a lamp of its own, matching how `execute` drives a
+ * linked pair.
+ */
+function deriveLeds(config: Config): DerivedLed[] {
+  const leds: DerivedLed[] = []
+  for (const mapping of config.mappings) {
+    if (mapping.qsys.type !== 'toggle') continue
+    const lamp = LAMP_BY_ADDRESS.get(
+      `${mapping.midi.type}:${mapping.midi.channel}:${mapping.midi.number}`,
+    )
+    if (!lamp) continue
+    const primary = resolveTargets(mapping.qsys)[0]
+    if (!primary.component || !primary.control) continue
+    leds.push({
+      key: keyOf(primary),
+      component: primary.component,
+      control: primary.control,
+      midi: { channel: lamp.channel, note: lamp.note },
+    })
+  }
+  return leds
 }
 
 export class MappingEngine {
@@ -62,8 +123,8 @@ export class MappingEngine {
       }
     }
 
-    for (const led of config.feedback.mute_leds) {
-      this.ledMap.set(`${led.component}:${led.control}`, led.midi)
+    for (const led of deriveLeds(config)) {
+      this.ledMap.set(led.key, led.midi)
     }
 
     if (config.feedback.enabled) {
@@ -73,7 +134,13 @@ export class MappingEngine {
 
   handleCC(channel: number, cc: number, value: number): void {
     const mapping = this.ccMap.get(`${channel}:${cc}`)
-    if (!mapping) return
+    if (!mapping) {
+      // Only for a button. An unmapped fader or knob streams CC continuously
+      // and would bury the log under a single sweep.
+      const button = BUTTON_BY_ADDRESS.get(`cc:${channel}:${cc}`)
+      if (button && value > 0) this.log(`${button} — no mapping for this button`)
+      return
+    }
     // Toggle buttons (mutes, rec arm) send CC 127 on press and CC 0 on release.
     // Ignore the 0 so we don't double-fire and immediately undo the toggle.
     if (mapping.qsys.type === 'toggle' && value === 0) return
@@ -84,7 +151,10 @@ export class MappingEngine {
 
   handleNoteOn(channel: number, note: number): void {
     const mapping = this.noteMap.get(`${channel}:${note}`)
-    if (!mapping) return
+    if (!mapping) {
+      this.log(`note ${channel}:${note} — no mapping for this button`)
+      return
+    }
     this.execute(mapping, 127).catch((err) => {
       console.error(`[Bridge] QRC error for "${mapping.label ?? 'unknown'}": ${err.message}`)
     })
@@ -105,6 +175,12 @@ export class MappingEngine {
 
   /** Hot-reload mappings from a new config without restarting the app. */
   reload(config: Config): void {
+    // A lamp lit under the outgoing assignment has to be darkened here. The
+    // Core only pushes changes to controls we are still watching, so once a
+    // button moves off a component nothing will ever arrive to clear the lamp
+    // it left behind — it would sit lit for the rest of the show.
+    const lit = [...this.ledMap].filter(([key]) => this.toggleState.get(key) === 1)
+
     this.ccMap.clear()
     this.noteMap.clear()
     this.toggleState.clear()
@@ -115,10 +191,19 @@ export class MappingEngine {
       if (mapping.midi.type === 'cc') this.ccMap.set(key, mapping)
       else this.noteMap.set(key, mapping)
     }
-    for (const led of config.feedback.mute_leds) {
-      this.ledMap.set(`${led.component}:${led.control}`, led.midi)
+    for (const led of deriveLeds(config)) {
+      this.ledMap.set(led.key, led.midi)
     }
-    console.log(`[Bridge] Mappings reloaded — ${this.ccMap.size} CC, ${this.noteMap.size} note`)
+
+    // Only lamps whose binding actually moved. One that still shows the same
+    // control is left alone rather than blinked off and repainted by the poll.
+    for (const [key, old] of lit) {
+      if (this.ledMap.get(key)?.note === old.note) continue
+      this.midi.sendNoteOff(old.channel, old.note)
+    }
+
+    this.config = config
+    console.log(`[Bridge] Mappings reloaded — ${this.ccMap.size} CC, ${this.noteMap.size} note, ${this.ledMap.size} LED`)
   }
 
   getRecentActivity(): string[] {
@@ -126,13 +211,24 @@ export class MappingEngine {
   }
 
   async setupChangeGroup(): Promise<void> {
-    if (!this.config.feedback.enabled || this.ledMap.size === 0) return
+    if (!this.config.feedback.enabled) return
+
+    // AddComponentControl accumulates on a group id, so re-subscribing after a
+    // reload would leave the component a button was reassigned away from
+    // watched forever. Destroy first — the group is rebuilt from scratch below.
+    // On the first connect there is no group yet and the Core may reject this;
+    // that is the expected case, not a fault, so it stays out of the error log.
+    await this.qrc.call('ChangeGroup.Destroy', { Id: CHANGE_GROUP_ID })
+      .catch((err) => console.log(`[Bridge] No existing ChangeGroup to destroy (${err.message})`))
+
+    if (this.ledMap.size === 0) return
 
     // Group controls by component for the ChangeGroup subscription
     const byComponent = new Map<string, string[]>()
-    for (const led of this.config.feedback.mute_leds) {
+    for (const led of deriveLeds(this.config)) {
       if (!byComponent.has(led.component)) byComponent.set(led.component, [])
-      byComponent.get(led.component)!.push(led.control)
+      const controls = byComponent.get(led.component)!
+      if (!controls.includes(led.control)) controls.push(led.control)
     }
 
     for (const [component, controls] of byComponent) {
@@ -201,10 +297,15 @@ export class MappingEngine {
   }
 
   private async execute(mapping: Mapping, midiValue: number): Promise<void> {
-    if (!this.qrc.isConnected) return
-
     const q = mapping.qsys
     const label = mapping.label ?? `${mapping.midi.type}:${mapping.midi.number}`
+
+    // Returning silently here made a dropped Core connection indistinguishable
+    // from a broken mapping — raw MIDI in the log, nothing else, no error.
+    if (!this.qrc.isConnected) {
+      this.log(`${label} — Q-SYS not connected, press ignored`)
+      return
+    }
 
     switch (q.type) {
       case 'component_control': {

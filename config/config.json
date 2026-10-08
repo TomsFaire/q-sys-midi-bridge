@@ -537,19 +537,29 @@
     }
   ],
   "feedback": {
-    "enabled": true,
-    "mute_leds": [
-      { "component": "Mic.01.Gain", "control": "mute", "midi": { "channel": 1, "note": 1  } },
-      { "component": "Mic.02.Gain", "control": "mute", "midi": { "channel": 1, "note": 4  } },
-      { "component": "Mic.03.Gain", "control": "mute", "midi": { "channel": 1, "note": 7  } },
-      { "component": "Mic.04.Gain", "control": "mute", "midi": { "channel": 1, "note": 10 } },
-      { "component": "Styb.Gain",   "control": "mute", "midi": { "channel": 1, "note": 13 } },
-      { "component": "Sptfy.Gain",  "control": "mute", "midi": { "channel": 1, "note": 16 } },
-      { "component": "ZoomRX.Gain", "control": "mute", "midi": { "channel": 1, "note": 19 } },
-      { "component": "Slides.Gain", "control": "mute", "midi": { "channel": 1, "note": 22 } },
-      { "component": "Mains.Gain",  "control": "mute", "midi": { "channel": 1, "note": 25 } },
-      { "component": "ZoomTX.Gain", "control": "mute", "midi": { "channel": 1, "note": 26 } },
-      { "component": "Rec.Gain",    "control": "mute", "midi": { "channel": 1, "note": 27 } }
-    ]
+    "enabled": true
+    // LED feedback is derived from "mappings" above — any note_on button bound
+    // to a toggle lights its own lamp and subscribes its own control, so a
+    // reassigned button takes its LED with it.
+    //
+    // "mute_leds" is no longer read. It was keyed the other way round
+    // (component -> note) and maintained by hand, while neither mapping editor
+    // wrote to it — so reassigning a button moved what the button did and left
+    // its lamp showing the old component. Kept here, commented, as the record
+    // of what the old shape looked like:
+    //
+    // "mute_leds": [
+    //   { "component": "Mic.01.Gain", "control": "mute", "midi": { "channel": 1, "note": 1  } },
+    //   { "component": "Mic.02.Gain", "control": "mute", "midi": { "channel": 1, "note": 4  } },
+    //   { "component": "Mic.03.Gain", "control": "mute", "midi": { "channel": 1, "note": 7  } },
+    //   { "component": "Mic.04.Gain", "control": "mute", "midi": { "channel": 1, "note": 10 } },
+    //   { "component": "Styb.Gain",   "control": "mute", "midi": { "channel": 1, "note": 13 } },
+    //   { "component": "Sptfy.Gain",  "control": "mute", "midi": { "channel": 1, "note": 16 } },
+    //   { "component": "ZoomRX.Gain", "control": "mute", "midi": { "channel": 1, "note": 19 } },
+    //   { "component": "Slides.Gain", "control": "mute", "midi": { "channel": 1, "note": 22 } },
+    //   { "component": "Mains.Gain",  "control": "mute", "midi": { "channel": 1, "note": 25 } },
+    //   { "component": "ZoomTX.Gain", "control": "mute", "midi": { "channel": 1, "note": 26 } },
+    //   { "component": "Rec.Gain",    "control": "mute", "midi": { "channel": 1, "note": 27 } }
+    // ]
   }
 }

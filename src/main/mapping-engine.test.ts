@@ -29,14 +29,13 @@ function config(): Config {
     mappings: [
       {
         label: 'Mic 1 Mute',
-        midi: { type: 'note_on', channel: 1, number: 1 },
+        // Mute 1: the press arrives as CC ch1 cc22, its lamp is note 1.
+        midi: { type: 'cc', channel: 1, number: 22 },
         qsys: { type: 'toggle', component: 'Mic.01.Gain', control: 'mute' },
       },
     ],
-    feedback: {
-      enabled: true,
-      mute_leds: [{ component: 'Mic.01.Gain', control: 'mute', midi: { channel: 1, note: 1 } }],
-    },
+    // No per-LED config: note 1 lights because the mapping above binds it.
+    feedback: { enabled: true },
   }
 }
 
@@ -77,7 +76,7 @@ test('a button press after an out-of-band mute toggles from the Core state, not 
   // press unmutes, which is what the operator sees on the strip.
   const { qrc, midi, engine } = build()
   push(qrc, 1)
-  engine.handleNoteOn(1, 1)
+  engine.handleCC(1, 22, 127)
   await new Promise((r) => setImmediate(r))
 
   const set = qrc.calls.filter((c) => c.method === 'Component.Set')
@@ -87,6 +86,31 @@ test('a button press after an out-of-band mute toggles from the Core state, not 
     Controls: [{ Name: 'mute', Value: 0 }],
   })
   assert.deepEqual(midi.sent, ['on 1:1', 'off 1:1'])
+})
+
+test('a press while the Core is disconnected is reported, not swallowed', async () => {
+  // The silent early return in execute() made a dropped QRC connection look
+  // identical to a broken mapping: raw MIDI scrolls past and nothing else
+  // happens. The activity log has to name the reason.
+  const { qrc, engine } = build()
+  qrc.isConnected = false
+
+  engine.handleCC(1, 22, 127)
+  await new Promise((r) => setImmediate(r))
+
+  assert.match(engine.getRecentActivity()[0] ?? '', /not connected/i)
+  assert.deepEqual(qrc.calls, [])
+})
+
+test('a press on an unmapped button is reported, not swallowed', async () => {
+  // The other half of "nothing happens": the note arrived but matched no
+  // mapping, which is a config problem rather than a connection one.
+  const { engine } = build()
+
+  engine.handleCC(1, 29, 127)
+  await new Promise((r) => setImmediate(r))
+
+  assert.match(engine.getRecentActivity()[0] ?? '', /no mapping/i)
 })
 
 test('a change for a control with no LED entry leaves the LEDs alone', () => {
