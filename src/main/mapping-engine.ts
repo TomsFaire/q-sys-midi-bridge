@@ -9,6 +9,7 @@
 import { QrcClient } from './qrc-client.js'
 import { MidiIO } from './midi-io.js'
 import type { Config, Mapping } from './config.js'
+import { parseCrosspoint, resolveFollowConfig, routesFromControls, watchedCrosspoints, STRIPS } from './router-follow.js'
 
 const CHANGE_GROUP_ID = 'mutes'
 
@@ -24,6 +25,13 @@ export class MappingEngine {
   private ledMap = new Map<string, { channel: number; note: number }>()
 
   private recentActivity: string[] = []
+
+  // Follow-router: last routed input per output (1-8), and the callback fired
+  // when a route changes. The first state after (re)connect is a baseline and
+  // does not fire, so hand-edited Knob A mappings survive a restart.
+  private routes = new Map<number, number>()
+  private routesBaselined = false
+  onRouteChange?: (strip: number, input: number) => void
 
   constructor(qrc: QrcClient, midi: MidiIO, config: Config) {
     this.qrc = qrc
@@ -43,9 +51,7 @@ export class MappingEngine {
       this.ledMap.set(`${led.component}:${led.control}`, led.midi)
     }
 
-    if (config.feedback.enabled) {
-      this.qrc.on('notification', (_id: string, result: unknown) => this.handleNotification(result))
-    }
+    this.qrc.on('notification', (_id: string, result: unknown) => this.handleNotification(result))
   }
 
   handleCC(channel: number, cc: number, value: number): void {
@@ -75,13 +81,13 @@ export class MappingEngine {
   setQrc(qrc: QrcClient): void {
     this.qrc.removeAllListeners('notification')
     this.qrc = qrc
-    if (this.config.feedback.enabled) {
-      this.qrc.on('notification', (_id: string, result: unknown) => this.handleNotification(result))
-    }
+    this.routesBaselined = false
+    this.qrc.on('notification', (_id: string, result: unknown) => this.handleNotification(result))
   }
 
   /** Hot-reload mappings from a new config without restarting the app. */
   reload(config: Config): void {
+    this.config = config
     this.ccMap.clear()
     this.noteMap.clear()
     this.toggleState.clear()
@@ -102,14 +108,27 @@ export class MappingEngine {
     return this.recentActivity.slice()
   }
 
-  async setupChangeGroup(): Promise<void> {
-    if (!this.config.feedback.enabled || this.ledMap.size === 0) return
+  private get followRouter() {
+    return resolveFollowConfig(this.config.follow_router)
+  }
 
-    // Group controls by component for the ChangeGroup subscription
+  async setupChangeGroup(): Promise<void> {
+    const follow = this.followRouter
+    const ledsOn = this.config.feedback.enabled && this.ledMap.size > 0
+    if (!ledsOn && !follow.enabled) return
+
+    // Group controls by component for the ChangeGroup subscription. Everything
+    // goes into the one existing group: the Core has a small change-group budget.
     const byComponent = new Map<string, string[]>()
-    for (const led of this.config.feedback.mute_leds) {
-      if (!byComponent.has(led.component)) byComponent.set(led.component, [])
-      byComponent.get(led.component)!.push(led.control)
+    if (ledsOn) {
+      for (const led of this.config.feedback.mute_leds) {
+        if (!byComponent.has(led.component)) byComponent.set(led.component, [])
+        byComponent.get(led.component)!.push(led.control)
+      }
+    }
+    if (follow.enabled) {
+      byComponent.set(follow.router, [...(byComponent.get(follow.router) ?? []), ...watchedCrosspoints()])
+      this.routesBaselined = false
     }
 
     for (const [component, controls] of byComponent) {
@@ -128,15 +147,30 @@ export class MappingEngine {
       Rate: 0.05,
     }).catch((err) => console.error(`[Bridge] ChangeGroup AutoPoll failed: ${err.message}`))
 
-    // Immediate poll to sync initial LED state on connect
+    // Immediate poll to sync initial LED / route state on connect
     const initial = await this.qrc.call('ChangeGroup.Poll', { Id: CHANGE_GROUP_ID })
       .catch((err) => {
         console.error(`[Bridge] Initial ChangeGroup.Poll failed: ${err.message}`)
         return null
       })
     if (initial) this.handleNotification(initial)
+    // Whatever the poll returned is the baseline; later changes are real route changes.
+    this.routesBaselined = true
 
     console.log('[Bridge] ChangeGroup feedback active')
+  }
+
+  /** Current route per strip, as last seen from the Core. */
+  getRoutes(): Map<number, number> {
+    return new Map(this.routes)
+  }
+
+  /** Read the router fresh from the Core (used by the Auto-map button). */
+  async readRoutes(): Promise<Map<number, number>> {
+    if (!this.qrc.isConnected) throw new Error('Q-SYS not connected — check host in config.json')
+    const result = await this.qrc.call('Component.GetControls', { Name: this.followRouter.router }) as
+      { Controls?: Array<{ Name: string; Value?: unknown }> } | undefined
+    return routesFromControls(result?.Controls ?? [])
   }
 
   syncLEDs(): void {
@@ -161,6 +195,8 @@ export class MappingEngine {
     }
 
     for (const change of r.Changes) {
+      this.trackRoute(change)
+      if (!this.config.feedback.enabled) continue
       const key = `${change.Component}:${change.Name}`
       const val = change.Value > 0 ? 1 : 0
       this.toggleState.set(key, val)
@@ -173,6 +209,18 @@ export class MappingEngine {
         this.midi.sendNoteOff(led.channel, led.note)
       }
     }
+  }
+
+  private trackRoute(change: { Component: string; Name: string; Value: number }): void {
+    const follow = this.followRouter
+    if (!follow.enabled || change.Component !== follow.router) return
+    const cp = parseCrosspoint(change.Name)
+    if (!cp || cp.output < 1 || cp.output > STRIPS) return
+    // A route change flips two crosspoints (old off, new on); only the "on" matters.
+    if (!(change.Value > 0)) return
+    const previous = this.routes.get(cp.output)
+    this.routes.set(cp.output, cp.input)
+    if (this.routesBaselined && previous !== cp.input) this.onRouteChange?.(cp.output, cp.input)
   }
 
   private async execute(mapping: Mapping, midiValue: number): Promise<void> {

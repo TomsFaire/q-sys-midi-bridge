@@ -9,7 +9,10 @@ import { EventEmitter } from 'node:events'
 import { QrcClient } from './qrc-client.js'
 import { MidiIO } from './midi-io.js'
 import { MappingEngine } from './mapping-engine.js'
-import { loadConfig } from './config.js'
+import { loadConfig, findConfigPath } from './config.js'
+import { loadMappings, saveMappings, loadFollowRouter, saveFollowRouterEnabled } from './mapping-service.js'
+import { autoMapKnobA, resolveFollowConfig } from './router-follow.js'
+import type { AutoMapResult } from './router-follow.js'
 import type { Config } from './config.js'
 
 export class Bridge extends EventEmitter {
@@ -27,6 +30,12 @@ export class Bridge extends EventEmitter {
     })
     this.midi = new MidiIO(config.midi.deviceName)
     this.engine = new MappingEngine(this.qrc, this.midi, config)
+    // A route changed in Q-SYS/UCI: retarget only that strip's Knob A.
+    this.engine.onRouteChange = (strip) => {
+      this.applyAutoMap(this.engine.getRoutes(), [strip]).catch((err) => {
+        console.error(`[Bridge] Follow-router remap of strip ${strip} failed: ${err.message}`)
+      })
+    }
 
     this.wireQrcEvents(`Connected to Q-Sys at ${config.qsys.host}:${config.qsys.port}`)
 
@@ -97,6 +106,35 @@ export class Bridge extends EventEmitter {
 
     this.emit('status-change')
     console.log('[Bridge] Config hot-reloaded')
+  }
+
+  get followRouterEnabled(): boolean {
+    return resolveFollowConfig(this.config.follow_router).enabled
+  }
+
+  /** Turn "Knob A follows the input router" on or off and apply it. */
+  async setFollowRouter(enabled: boolean): Promise<void> {
+    saveFollowRouterEnabled(findConfigPath(), enabled)
+    await this.reloadConfig()
+  }
+
+  /** The Auto-map button: read the router now and point every Knob A at its routed source. */
+  async autoMapKnobAFromRouter(): Promise<AutoMapResult> {
+    if (!this.followRouterEnabled) throw new Error('Follow input router is turned off')
+    const routes = await this.engine.readRoutes()
+    return this.applyAutoMap(routes)
+  }
+
+  private async applyAutoMap(routes: Map<number, number>, only?: number[]): Promise<AutoMapResult> {
+    const configPath = findConfigPath()
+    const cfg = loadFollowRouter(configPath)
+    const result = autoMapKnobA(loadMappings(configPath), routes, cfg, only)
+    if (result.changed.length > 0) {
+      saveMappings(configPath, result.mappings)
+      await this.reloadConfig()
+      console.log(`[Bridge] Knob A remapped for strip(s) ${result.changed.join(', ')}`)
+    }
+    return result
   }
 
   /**

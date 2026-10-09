@@ -9,6 +9,8 @@ import fs from 'node:fs'
 import { QrcClient } from './qrc-client.js'
 import { stripComments } from './config.js'
 import type { Mapping } from './config.js'
+import { resolveFollowConfig } from './router-follow.js'
+import type { FollowRouterConfig } from './router-follow.js'
 
 // ── Physical controls ─────────────────────────────────────────────────────────
 // Hardcoded from the midi-learn session. All 51 controls, in layout order.
@@ -104,6 +106,20 @@ export function saveMappings(configFilePath: string, mappings: Mapping[]): void 
   const raw = fs.readFileSync(configFilePath, 'utf-8')
   const config = parseConfigFile(raw)
   config.mappings = mappings
+  fs.writeFileSync(configFilePath, JSON.stringify(config, null, 2), 'utf-8')
+}
+
+/** Read the follow_router block (defaults filled in). */
+export function loadFollowRouter(configFilePath: string): FollowRouterConfig {
+  const config = parseConfigFile(fs.readFileSync(configFilePath, 'utf-8'))
+  return resolveFollowConfig(config.follow_router as Partial<FollowRouterConfig> | undefined)
+}
+
+/** Flip follow_router.enabled, leaving every other key in the config alone. */
+export function saveFollowRouterEnabled(configFilePath: string, enabled: boolean): void {
+  const config = parseConfigFile(fs.readFileSync(configFilePath, 'utf-8'))
+  const current = (config.follow_router as Record<string, unknown> | undefined) ?? {}
+  config.follow_router = { ...current, enabled }
   fs.writeFileSync(configFilePath, JSON.stringify(config, null, 2), 'utf-8')
 }
 

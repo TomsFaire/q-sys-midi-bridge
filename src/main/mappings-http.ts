@@ -11,6 +11,7 @@ import { QrcClient } from './qrc-client.js'
 import type { QrcCredentials } from './qrc-client.js'
 import { stripComments } from './config.js'
 import { verifyPassword, SessionStore } from './auth.js'
+import type { FollowRouterControl } from './router-follow.js'
 import {
   PHYSICAL_CONTROLS,
   loadMappings,
@@ -31,6 +32,7 @@ export class MappingsHttpHandler {
     private readonly configFilePath: string,
     private readonly mappingsHtmlPath: string,
     private readonly onReload?: () => Promise<void>,
+    private readonly followRouter?: FollowRouterControl,
   ) {}
 
   /** Opens the discovery QRC connection. Call once, alongside UciServer.start(). */
@@ -168,6 +170,32 @@ export class MappingsHttpHandler {
         await saveAndApplyMappings(this.configFilePath, result.mappings, this.onReload)
         this.sendJson(res, 200, { ok: true, count: result.mappings.length })
       }).catch((err) => this.sendJson(res, 400, { error: (err as Error).message ?? 'Invalid request body' }))
+      return true
+    }
+
+    if (pathname === '/api/mappings/follow-router' && req.method === 'GET') {
+      this.sendJson(res, 200, { available: !!this.followRouter, enabled: this.followRouter?.isEnabled() ?? false })
+      return true
+    }
+
+    if (pathname === '/api/mappings/follow-router' && req.method === 'POST') {
+      const fr = this.followRouter
+      if (!fr) { this.sendJson(res, 503, { error: 'Bridge is not running' }); return true }
+      this.readJsonBody(req).then(async (body) => {
+        const enabled = (body as Record<string, unknown> | undefined)?.enabled
+        if (typeof enabled !== 'boolean') { this.sendJson(res, 400, { error: 'enabled must be true or false' }); return }
+        await fr.setEnabled(enabled)
+        this.sendJson(res, 200, { ok: true, enabled })
+      }).catch((err) => this.sendJson(res, 400, { error: (err as Error).message ?? 'Invalid request body' }))
+      return true
+    }
+
+    if (pathname === '/api/mappings/auto-map-knob-a' && req.method === 'POST') {
+      const fr = this.followRouter
+      if (!fr) { this.sendJson(res, 503, { error: 'Bridge is not running' }); return true }
+      fr.autoMap()
+        .then((result) => this.sendJson(res, 200, result))
+        .catch((err) => this.sendJson(res, 409, { error: (err as Error).message }))
       return true
     }
 

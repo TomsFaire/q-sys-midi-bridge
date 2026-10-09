@@ -67,6 +67,13 @@ app.whenReady().then(async () => {
     password: config?.qsys?.password,
   }
 
+  // What the mapping pages use to toggle follow-router and run Auto-map.
+  const followRouter = bridge ? {
+    isEnabled: () => bridge.followRouterEnabled,
+    setEnabled: (enabled: boolean) => bridge.setFollowRouter(enabled),
+    autoMap: () => bridge.autoMapKnobAFromRouter(),
+  } : undefined
+
   // UCI web server — serves foh-uci.html and relays browser WS traffic to the
   // Core over its own TCP sockets (independent of the MIDI bridge connection).
   const uciEnabled = hasHost && (config?.uci?.enabled ?? true)
@@ -78,6 +85,7 @@ app.whenReady().then(async () => {
       findConfigPath(),
       mappingsHtmlPath,
       async () => { await bridge?.reloadConfig() },
+      followRouter,
     )
     uciServer = new UciServer()
     uciServer.on('error', (err: Error) => {
@@ -104,6 +112,7 @@ app.whenReady().then(async () => {
     uciPort,
     () => bridge !== null,
     qsysCredentials,
+    followRouter,
   )
 
   // Build the tray icon

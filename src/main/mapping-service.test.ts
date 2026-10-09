@@ -51,3 +51,22 @@ test('saveMappings then loadMappings round-trips through a real config file', ()
 
   fs.rmSync(dir, { recursive: true, force: true })
 })
+
+test('saveFollowRouterEnabled flips only the flag and leaves the rest of the config alone', async () => {
+  const { saveFollowRouterEnabled, loadFollowRouter } = await import('./mapping-service.js')
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mqb-test-'))
+  const configPath = path.join(dir, 'config.json')
+  fs.writeFileSync(configPath, JSON.stringify({
+    qsys: { host: 'h', port: 1710 }, midi: { deviceName: '' }, mappings: [], feedback: { enabled: false, mute_leds: [] },
+    follow_router: { sources: { flex: { component: 'Flex.Inputs' } } },
+  }))
+  assert.equal(loadFollowRouter(configPath).enabled, false)
+  saveFollowRouterEnabled(configPath, true)
+  const cfg = loadFollowRouter(configPath)
+  assert.equal(cfg.enabled, true)
+  assert.equal(cfg.sources.flex.component, 'Flex.Inputs')
+  // Saving mappings afterwards must not drop the setting.
+  saveMappings(configPath, [])
+  assert.equal(loadFollowRouter(configPath).enabled, true)
+  fs.rmSync(dir, { recursive: true, force: true })
+})

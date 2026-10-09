@@ -45,6 +45,9 @@ export interface Config {
   // UCI web server (serves foh-uci.html + relays browser WS to the Core).
   // Defaults when absent: enabled: true, port: 3001.
   uci?: { enabled?: boolean; port?: number; mappingsPasswordHash?: string }
+  // When enabled, Knob A 1-8 follow the Input.Router: each is pointed at the
+  // gain control of the source routed to Mic N. See router-follow.ts.
+  follow_router?: Partial<import('./router-follow.js').FollowRouterConfig>
 }
 
 export function isValidPort(value: unknown): value is number {
