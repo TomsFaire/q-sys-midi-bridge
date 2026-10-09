@@ -651,7 +651,8 @@ function loadPageAdapter(failComponents = false): { adapter: any; calls: any[] }
       if (failComponents && url === '/api/qsys/components') {
         return { ok: false, status: 502, json: async () => ({ error: 'Logon failed' }) }
       }
-      return { ok: true, status: 200, json: async () => ({ components: [{ name: 'A' }], controls: [{ name: 'c' }] }) }
+      // `revision` is what loadEditorState captures and every save echoes back.
+      return { ok: true, status: 200, json: async () => ({ components: [{ name: 'A' }], controls: [{ name: 'c' }], revision: 'r1' }) }
     },
     MappingEditor: { mount: async () => ({}) },
   }
@@ -675,8 +676,11 @@ test('the page adapter hits the expected endpoint, method and body for every met
     { url: '/api/qsys/components', method: 'GET', body: undefined },
     { url: '/api/qsys/components', method: 'GET', body: undefined },
     { url: '/api/qsys/components/Mic%201%2FGain/controls', method: 'GET', body: undefined },
-    { url: '/api/mappings', method: 'POST', body: JSON.stringify(m) },
-    { url: '/api/mappings/apply', method: 'POST', body: JSON.stringify(m) },
+    // Saves carry the revision the table was built from. Without it a tab left
+    // open across a show recall would write its stale snapshot back over the
+    // show; the server answers 409 instead. loadEditorState captured it above.
+    { url: '/api/mappings', method: 'POST', body: JSON.stringify({ mappings: m, revision: 'r1' }) },
+    { url: '/api/mappings/apply', method: 'POST', body: JSON.stringify({ mappings: m, revision: 'r1' }) },
   ])
 })
 

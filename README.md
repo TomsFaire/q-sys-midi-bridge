@@ -406,6 +406,60 @@ A mapping on a fader or knob has no lamp and is skipped. On a ganged mapping (`l
 node scripts/check-leds.mjs    # what every lamp will show, and any dead mapping
 ```
 
+---
+
+## Shows (saved mapping sets)
+
+A **show** is the whole `mappings` array saved under a name. Recall one and the
+surface changes over without restarting the app.
+
+```
+~/Library/Application Support/midi-qsys-bridge/shows/
+    gala-2026.json
+    monday-standup.json
+  _auto/                       ← pre-recall backups, newest 20 kept
+    before-gala-2026.json
+```
+
+A show carries **mappings only** — never `qsys` (host, port, credentials),
+`uci`, `midi` or `feedback`. That is what makes a show file safe to copy
+between rigs: recalling one can't repoint the bridge at another Core, and
+can't drop the QRC connection.
+
+**Saving and recalling**
+
+| Where | Save | Recall |
+|---|---|---|
+| Mappings page (`:3001/mappings`) | "Save as Show…" | picker + Recall |
+| Tray | Shows ▸ Save Current as Show | Shows ▸ *(name)* |
+
+The tray saves under a generated name (`Show 2026-10-08 14-35`) because it has
+no text input; rename on the mappings page.
+
+**Undo.** Every recall first backs up the live mappings into `shows/_auto/`.
+Because a backup is an ordinary show file, undo is the same operation — the
+tray offers `Undo recall → "…"` at the top level.
+
+A recall that can't be backed up **doesn't happen**: a recall you can't undo is
+the irreversible thing the backup exists to prevent. Likewise an invalid show
+is refused with the config left byte-identical.
+
+**Which show is live** is recorded as `activeShow` in `config.json` and shown in
+the mappings page footer. An ordinary save leaves it alone, so it keeps naming
+the show the mappings came from even after you edit them.
+
+### Two things to know
+
+**Faders don't re-sync themselves.** There's no soft takeover. After a recall
+Fader 1 is still physically where you left it but now points somewhere else, so
+the next nudge jumps. Mute lamps self-correct from the Core's poll; faders
+can't. Move each one before it's live.
+
+**A save from a stale page is refused.** The mappings page sends the whole
+array, so a tab left open across a recall would otherwise write its pre-recall
+snapshot back over the show. Saves carry a revision and a mismatch returns
+`409` — reload the page and redo the edit.
+
 When `enabled: false`, toggle state is tracked locally only — the LED will drift if anything else changes the mute outside the MIDI controller.
 
 ---

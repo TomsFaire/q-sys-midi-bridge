@@ -90,9 +90,16 @@ export class Bridge extends EventEmitter {
         console.error(`[QRC] Reconnect failed: ${err.message}`)
       })
     } else if (this.qrc.isConnected) {
-      await this.engine.setupChangeGroup().catch((err) => {
-        console.error(`[Bridge] setupChangeGroup after reload: ${err.message}`)
-      })
+      // Deliberately not awaited. engine.reload() above has already swapped
+      // ccMap/noteMap synchronously, so the new mappings are live right now —
+      // whereas setupChangeGroup subscribes one component at a time, each with
+      // its own 10s QRC timeout. Against a Core that is up but not answering
+      // (Designer compiling, CPU pegged) that is minutes, and awaiting it would
+      // leave a show recall looking hung long after it had actually taken
+      // effect. Lamp feedback catches up when it catches up.
+      this.engine.setupChangeGroup()
+        .then(() => console.log('[Bridge] Lamp feedback rebuilt'))
+        .catch((err) => console.error(`[Bridge] setupChangeGroup after reload: ${err.message}`))
     }
 
     this.emit('status-change')

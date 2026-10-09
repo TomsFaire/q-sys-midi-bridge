@@ -68,6 +68,11 @@ export interface Config {
   // UCI web server (serves foh-uci.html + relays browser WS to the Core).
   // Defaults when absent: enabled: true, port: 3001.
   uci?: { enabled?: boolean; port?: number; mappingsPasswordHash?: string }
+  // Which saved show was last recalled. Written by the recall, and left alone
+  // by an ordinary mapping save — so an edit after a recall leaves this
+  // pointing at the show the mappings came from, which is what lets the UI
+  // say "Gala 2026 (edited)" rather than claiming the surface is untouched.
+  activeShow?: { id: string; name: string; appliedAt: string }
 }
 
 export function isValidPort(value: unknown): value is number {
@@ -134,6 +139,18 @@ export function seedUserConfig(): void {
  */
 export function findConfigPath(): string {
   return path.join(app.getPath('userData'), 'config.json')
+}
+
+/**
+ * Where saved shows live, beside config.json.
+ *
+ * electron-builder strips productName from the packaged package.json, so
+ * app.getName() is "midi-qsys-bridge" in both a packaged build and `npm
+ * start` — one userData directory, and a show saved in development is
+ * visible to the installed app.
+ */
+export function getShowsDir(): string {
+  return path.join(app.getPath('userData'), 'shows')
 }
 
 export { stripComments }

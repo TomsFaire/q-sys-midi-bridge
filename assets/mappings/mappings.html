@@ -68,6 +68,13 @@
     <button class="btn btn-warn" id="save-apply-btn">Save &amp; Apply</button>
     <span id="save-status"></span>
     <span class="spacer"></span>
+    <!-- Shows: recalling swaps the whole mapping set and hot-reloads the
+         bridge. The previous set is backed up first, so this is undoable. -->
+    <span id="active-show"></span>
+    <select id="show-select" title="Saved shows"></select>
+    <button class="btn btn-ghost" id="show-recall-btn">Recall</button>
+    <button class="btn btn-ghost" id="show-save-btn">Save as Show…</button>
+    <input id="show-name-input" class="hidden" placeholder="Show name" size="18">
   </footer>
 </div>
 
@@ -126,9 +133,19 @@ document.getElementById('login-btn').addEventListener('click', async () => {
   }
 })
 
+// The revision of the config this page's table was built from. Every save
+// carries it so a tab left open across a recall cannot silently write its
+// stale snapshot back over the show — the server answers 409 instead.
+let revision = null
+
 // The shared editor owns all table state. The page supplies only transport.
 const adapter = {
-  loadEditorState: () => api('/api/mappings'),
+  loadEditorState: async () => {
+    const state = await api('/api/mappings')
+    revision = state.revision
+    showActive(state.activeShow)
+    return state
+  },
   getQsysStatus: async () => {
     try { await api('/api/qsys/components'); return { connected: true } }
     catch (e) { return { connected: false, message: e.message } }
@@ -136,11 +153,19 @@ const adapter = {
   discoverComponents: async () => (await api('/api/qsys/components')).components,
   getComponentControls: async (name) =>
     (await api('/api/qsys/components/' + encodeURIComponent(name) + '/controls')).controls,
-  save: (m) => api('/api/mappings', { method: 'POST', body: JSON.stringify(m) }),
-  saveAndApply: (m) => api('/api/mappings/apply', { method: 'POST', body: JSON.stringify(m) }),
+  save: (m) => send('/api/mappings', m),
+  saveAndApply: (m) => send('/api/mappings/apply', m),
+}
+
+/** Posts mappings with the revision they were based on, and keeps the new one. */
+async function send(path, mappings) {
+  const result = await api(path, { method: 'POST', body: JSON.stringify({ mappings, revision }) })
+  revision = result.revision
+  return result
 }
 
 async function loadApp() {
+  refreshShows().catch(() => { /* the table matters more than the show list */ })
   editor = await MappingEditor.mount({
     root: document.getElementById('editor-root'),
     adapter,
@@ -151,6 +176,80 @@ async function loadApp() {
     },
   })
 }
+
+// ── Shows ────────────────────────────────────────────────────────────────────
+
+const showSelect = document.getElementById('show-select')
+const showNameInput = document.getElementById('show-name-input')
+
+function status(kind, text) {
+  const el = document.getElementById('save-status')
+  el.className = kind === 'ok' ? 'ok' : kind === 'err' ? 'err' : ''
+  el.textContent = text
+}
+
+/** Names the show the live mappings came from, so the header never implies none. */
+function showActive(active) {
+  document.getElementById('active-show').textContent = active ? 'Show: ' + active.name : ''
+}
+
+async function refreshShows() {
+  const { shows } = await api('/api/mappings/shows')
+  showSelect.textContent = ''
+  if (!shows.length) {
+    showSelect.appendChild(new Option('No shows saved yet', ''))
+    showSelect.disabled = true
+    return
+  }
+  showSelect.disabled = false
+  for (const s of shows) showSelect.appendChild(new Option(s.name + '  (' + s.count + ')', s.id))
+}
+
+document.getElementById('show-recall-btn').addEventListener('click', async () => {
+  const id = showSelect.value
+  if (!id) return
+  try {
+    status('info', 'Recalling…')
+    const r = await api('/api/mappings/shows/' + encodeURIComponent(id) + '/recall', { method: 'POST' })
+    // Recall rewrote the config, so the table and the revision are both stale.
+    await editor.reload()
+    status('ok', 'Recalled "' + r.name + '" — ' + r.count + ' mappings. Faders are not motorised; move each one before it is live.')
+  } catch (e) {
+    status('err', e.message)
+  }
+})
+
+document.getElementById('show-save-btn').addEventListener('click', async () => {
+  // Reveal-on-click input rather than prompt(), which Chromium disables in
+  // the Electron renderer — this keeps both hosts structurally identical.
+  if (showNameInput.classList.contains('hidden')) {
+    showNameInput.classList.remove('hidden')
+    showNameInput.focus()
+    return
+  }
+  const name = showNameInput.value.trim()
+  if (!name) { showNameInput.classList.add('hidden'); return }
+  try {
+    // getMappings throws when the initial load failed, which is what stops a
+    // blank table being saved as a show.
+    const mappings = editor.getMappings()
+    const { show } = await api('/api/mappings/shows', {
+      method: 'POST', body: JSON.stringify({ name, mappings }),
+    })
+    showNameInput.value = ''
+    showNameInput.classList.add('hidden')
+    await refreshShows()
+    showSelect.value = show.id
+    status('ok', 'Saved show "' + show.name + '" — ' + show.count + ' mappings')
+  } catch (e) {
+    status('err', e.message)
+  }
+})
+
+showNameInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') document.getElementById('show-save-btn').click()
+  if (e.key === 'Escape') { showNameInput.value = ''; showNameInput.classList.add('hidden') }
+})
 
 document.getElementById('refresh-btn').addEventListener('click', () => { if (editor) editor.refreshComponents() })
 document.getElementById('save-btn').addEventListener('click', () => { if (editor) editor.save() })

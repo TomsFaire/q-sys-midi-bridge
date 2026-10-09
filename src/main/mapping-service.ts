@@ -28,11 +28,26 @@ export function loadMappings(configFilePath: string): Mapping[] {
   return (config.mappings as Mapping[] | undefined) ?? []
 }
 
-export function saveMappings(configFilePath: string, mappings: Mapping[]): void {
+/**
+ * Merges top-level keys into the config in a single atomic write.
+ *
+ * One write matters when more than one key changes together: a recall sets
+ * `mappings` and `activeShow`, and two writes would leave a window where the
+ * config names one show but holds another's mappings — a crash in between
+ * makes that permanent. The temp-then-rename also means a full disk truncates
+ * a scratch file rather than the config the app needs to boot.
+ */
+export function patchConfig(configFilePath: string, patch: Record<string, unknown>): void {
   const raw = fs.readFileSync(configFilePath, 'utf-8')
   const config = parseConfigFile(raw)
-  config.mappings = mappings
-  fs.writeFileSync(configFilePath, JSON.stringify(config, null, 2), 'utf-8')
+  Object.assign(config, patch)
+  const tmp = `${configFilePath}.tmp`
+  fs.writeFileSync(tmp, JSON.stringify(config, null, 2), 'utf-8')
+  fs.renameSync(tmp, configFilePath)
+}
+
+export function saveMappings(configFilePath: string, mappings: Mapping[]): void {
+  patchConfig(configFilePath, { mappings })
 }
 
 export async function saveAndApplyMappings(
