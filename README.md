@@ -31,19 +31,18 @@ To package a distributable DMG:
 
 ```bash
 npm run package
-# output: release/MIDI Q-Sys Bridge-0.2.11-arm64.dmg
+# output: release/MIDI Q-Sys Bridge-<version>-arm64.dmg
 ```
+
+Tagging `v*` on `main` also builds and publishes the DMG as a GitHub Release (`.github/workflows/release.yml`).
 
 ---
 
 ## Config file location
 
-The app looks for `config.json` in these locations, in order:
+The app reads and writes exactly one file: `~/Library/Application Support/midi-qsys-bridge/config.json` (the user data dir).
 
-1. `~/Library/Application Support/midi-qsys-bridge/config.json` — user data dir (takes priority)
-2. `<app bundle>/config/config.json` — bundled default
-
-Edit the bundled `config/config.json` to get started, or copy it to the user data dir to survive app updates.
+The bundled `config/config.json` is only a **seed**. On first launch, if the user data copy doesn't exist, the app copies the bundled one there. After that the bundled file is never read again — so editing it, or a new key added to it in an update, does **not** reach an install that already has its own `config.json`. Edit the user data copy (**Tray → Open Config File** opens it).
 
 Use **Tray → Configure Mappings** to assign Q-Sys components to physical controls interactively — click **Save & Apply** to reload the bridge live without restarting. Use **Tray → Open Config File** to edit the raw JSON directly.
 
@@ -109,7 +108,9 @@ And in `config.json`, faders and mutes always target the Gain block component (`
     "deviceName": "MIDI Mix" // Substring match against MIDI port name
   },
   "mappings": [ ... ],       // see below
-  "feedback": { ... }        // see below
+  "feedback": { ... },       // see below
+  "follow_router": { ... },  // optional — see "Follow input router"
+  "activeShow": "..."        // written by the app — see "Shows"
 }
 ```
 
@@ -410,6 +411,38 @@ When `enabled: false`, toggle state is tracked locally only — the LED will dri
 
 ---
 
+## Follow input router (Knob A)
+
+Optional, **off by default**. When on, Knob A 1–8 control the gain of whichever source is currently routed to Mic 1–8 on `Input.Router`, so the knob always trims the thing you are actually hearing on that strip.
+
+Turn it on with the **Follow input router** checkbox on the mappings page (desktop or browser). **Auto-map Knob A** next to it remaps all eight knobs from the routes as they are now. After that, a route change made in Q-SYS or the UCI remaps only the strip that changed; the other knobs keep whatever they were pointed at.
+
+The result is stored as ordinary `component_control` mappings, so you can still read them in `config.json`. While Follow is on, the eight Knob A rows are locked in both editors, because the bridge owns them.
+
+| Router inputs | Component | Control |
+|---|---|---|
+| 1–8 Analog | `Analog.Inputs` | `channel.N.preamp.gain` |
+| 9–16 Flex | `Flex.Input` | `channel.N.preamp.gain` |
+| 17–24 Dante | `Dante.Input` | `channel.N.input.gain` |
+
+Ranges default to `-100..20` dB. Override any of this under `follow_router` in `config.json`; any key you leave out keeps its default (`src/main/router-follow.ts`):
+
+```jsonc
+"follow_router": {
+  "enabled": true,
+  "router": "Input.Router",       // router component name
+  "sources": {                    // per source group; {n} is the port 1-8 within the group
+    "dante": { "component": "Dante.Input", "control": "channel.{n}.input.gain", "min": -100, "max": 20 }
+  }
+}
+```
+
+Use the Q-SYS **script names**, not the block labels shown in Designer (the Dante block is labelled "Software-Dante-RX-1" but its script name is `Dante.Input`). A source group with a blank component is skipped and reported.
+
+**Soft takeover.** When a strip is pointed at a new source, the knob's physical position and the source's real level disagree. Writing the knob straight away would make a live source jump, so the knob is ignored until it reaches, or sweeps across, the source's current position. If the bridge can't read that level yet, it keeps retrying. Stereo-linked strips (`link`) are skipped by Auto-map and don't use soft takeover.
+
+---
+
 ## Shows (saved mapping sets)
 
 A **show** is the whole `mappings` array saved under a name. Recall one and the
@@ -452,10 +485,11 @@ the show the mappings came from even after you edit them.
 
 ### Two things to know
 
-**Faders don't re-sync themselves.** There's no soft takeover. After a recall
-Fader 1 is still physically where you left it but now points somewhere else, so
-the next nudge jumps. Mute lamps self-correct from the Core's poll; faders
-can't. Move each one before it's live.
+**Faders don't re-sync themselves.** Soft takeover exists only for Knob A while
+[Follow input router](#follow-input-router-knob-a) is on; faders and every other
+knob have none. After a recall Fader 1 is still physically where you left it but
+now points somewhere else, so the next nudge jumps. Mute lamps self-correct from
+the Core's poll; faders can't. Move each one before it's live.
 
 **A save from a stale page is refused.** The mappings page sends the whole
 array, so a tab left open across a recall would otherwise write its pre-recall
@@ -491,6 +525,8 @@ The app also serves the FOH mixer web UI and relays browser WebSocket traffic to
 - The Configurator's **Network** panel (**Configure Mappings… → Network — UCI Web Server**), which shows both the local and LAN URLs with their own Copy buttons
 
 **Config:** controlled by the `uci.enabled` and `uci.port` keys in `config.json` (see `src/main/config.ts`) — `enabled` defaults to `true`, `port` defaults to `3001`. Both can also be set from the Configurator's **Network** panel (**Configure Mappings… → Network — Q-SYS & UCI**) — after changing the port, click **Restart Now** to apply it. If you're opening a firewall rule for this app, the UCI port is the one to allow.
+
+**Idle tabs stay connected.** Each open UCI tab gets its own connection to the Core, and a Core closes any connection that is silent for 120 seconds. The relay therefore sends a NoOp on each tab's behalf every 30 seconds, so a UCI left open on a wall-mounted iPad isn't dropped and re-logged-on every two minutes. (Before 0.2.14 it was; the Core's event log showed `Remote Control closed - TIMEOUT` on a 2-minute cycle.)
 
 **Network caveat:** this works over the same WiFi network only. If the venue network has AP/client isolation enabled, devices on the same SSID can't reach each other — that's a network configuration issue, not an app bug.
 
@@ -535,6 +571,9 @@ Click the menu bar icon to see:
 - **UCI status line** — shows the LAN URL and connected client count when enabled, or an error if the UCI server failed to start
 - **Copy UCI Link** — copies the LAN UCI URL to the clipboard
 - **Recent activity log** (last 5 actions)
+- **Undo recall → "…"** — appears only after a show recall, and puts the previous mappings back (see [Shows](#shows-saved-mapping-sets))
+- **Shows** — your saved shows with their mapping counts (click one to recall it), **Save Current as Show**, and **Open Shows Folder**
+- **Configure Mappings…** — opens the desktop editor
 - **Open Config File** — opens the active config in your default editor
 - **Quit**
 
