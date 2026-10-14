@@ -98,3 +98,7 @@ input[type=number]::-webkit-inner-spin-button { opacity: 0.5; }
 
 .clear-btn { background: none; color: var(--text-dim); font-size: 13px; padding: 2px 5px; border-radius: 3px; }
 .clear-btn:hover { background: #ffe5e5; color: var(--red); }
+
+/* Knob A rows the bridge owns while Follow input router is on */
+tr.ctrl-row.locked, tr.link-row.locked { opacity: 0.75; }
+.lock-note { display: block; white-space: normal; font-size: 10px; font-weight: 400; font-style: italic; color: var(--text-dim); }

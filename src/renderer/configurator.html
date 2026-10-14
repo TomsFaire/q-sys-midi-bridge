@@ -148,6 +148,10 @@
       border-radius: 50%; animation: spin 0.7s linear infinite;
     }
     @keyframes spin { to { transform: rotate(360deg); } }
+
+    .fr-toggle { display:flex; align-items:center; gap:6px; font-size:12px; color:var(--text-dim); cursor:pointer; }
+    #auto-map-status { font-size:11px; color:var(--text-dim); }
+    #auto-map-status.ok { color: var(--green); } #auto-map-status.err { color: var(--red); }
   </style>
 </head>
 <body>
@@ -159,6 +163,11 @@
     <span id="status-text">Connecting…</span>
   </div>
   <button class="btn btn-ghost" id="refresh-btn">↺ Refresh Q-Sys</button>
+  <label class="fr-toggle" title="When on, Knob A 1-8 follow the Input Router: each controls the gain of the source routed to that Mic strip.">
+    <input type="checkbox" id="follow-router-toggle" disabled> Follow input router
+  </label>
+  <button class="btn btn-ghost" id="auto-map-btn" disabled title="Point Knob A 1-8 at the gain control of the source currently routed to each Mic strip">Auto-map Knob A</button>
+  <span id="auto-map-status"></span>
 </header>
 
 <details id="network-panel">
@@ -287,6 +296,8 @@ async function init() {
     adapter,
     onStatus,
   })
+  // The follow state may have arrived before the editor existed.
+  editor.setFollowLocked(followEnabled)
   hideOverlay()
   document.getElementById('save-btn').disabled = false
   document.getElementById('save-restart-btn').disabled = false
@@ -295,6 +306,53 @@ async function init() {
 document.getElementById('refresh-btn').addEventListener('click', () => { if (editor) editor.refreshComponents() })
 document.getElementById('save-btn').addEventListener('click', () => { if (editor) editor.save() })
 document.getElementById('save-restart-btn').addEventListener('click', () => { if (editor) editor.saveAndApply() })
+
+// ── Follow input router (Knob A) ──────────────────────────────────────────────
+
+let followEnabled = false
+
+async function initFollowRouter() {
+  const toggle = document.getElementById('follow-router-toggle')
+  const btn = document.getElementById('auto-map-btn')
+  const status = document.getElementById('auto-map-status')
+  const state = await ipcRenderer.invoke('cfg:get-follow-router')
+  toggle.checked = state.enabled
+  toggle.disabled = !state.available
+  btn.disabled = !state.available || !state.enabled
+  followEnabled = state.enabled
+  if (editor) editor.setFollowLocked(followEnabled)
+
+  toggle.addEventListener('change', async () => {
+    try {
+      await ipcRenderer.invoke('cfg:set-follow-router', toggle.checked)
+      btn.disabled = !toggle.checked
+      followEnabled = toggle.checked
+      if (editor) editor.setFollowLocked(followEnabled)
+      status.className = 'ok'
+      status.textContent = toggle.checked ? 'Follow router on' : 'Follow router off'
+    } catch (e) {
+      toggle.checked = !toggle.checked
+      status.className = 'err'
+      status.textContent = '✗ ' + e.message
+    }
+  })
+
+  btn.addEventListener('click', async () => {
+    status.className = ''
+    status.textContent = 'Reading router…'
+    try {
+      const result = await ipcRenderer.invoke('cfg:auto-map-knob-a')
+      // Auto-map rewrote the saved mappings, so the table and revision are stale.
+      if (editor) await editor.reload()
+      const skipped = result.skipped.map(s => `Knob A ${s.strip}: ${s.reason}`).join('; ')
+      status.className = skipped ? 'err' : 'ok'
+      status.textContent = `✓ ${result.changed.length} remapped` + (skipped ? ' — skipped: ' + skipped : '')
+    } catch (e) {
+      status.className = 'err'
+      status.textContent = '✗ ' + e.message
+    }
+  })
+}
 
 // ── Network panel ─────────────────────────────────────────────────────────────
 
@@ -443,6 +501,7 @@ init().catch(e => {
 })
 
 initNetwork().catch(e => console.error('Network panel init error:', e))
+initFollowRouter().catch(e => console.error('Follow-router init error:', e))
 </script>
 </body>
 </html>

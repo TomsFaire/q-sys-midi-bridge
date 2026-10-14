@@ -10,6 +10,8 @@ import { QrcClient } from './qrc-client.js'
 import { MidiIO } from './midi-io.js'
 import type { Config, Mapping, QsysRef } from './config.js'
 import { PHYSICAL_CONTROLS } from './physical-surface.js'
+import { parseCrosspoint, resolveFollowConfig, routesFromControls, watchedCrosspoints, STRIPS } from './router-follow.js'
+import { PickupGate, valueToCc } from './pickup.js'
 
 /** One resolved Q-SYS write target. */
 interface Target { component: string; control: string }
@@ -34,6 +36,28 @@ function resolveTargets(q: QsysRef): Target[] {
       control: q.link.control ?? primary.control,
     },
   ]
+}
+
+/** Minimum gap between attempts to re-read an unknown soft-takeover target, per knob. */
+const TARGET_READ_RETRY_MS = 500
+
+/** Knob A N's MIDI address ("channel:cc", the ccMap key) → strip N. */
+const KNOB_A_STRIP = new Map<string, number>()
+for (const pc of PHYSICAL_CONTROLS) {
+  const m = /^Knob A (\d+)$/.exec(pc.label)
+  if (m && pc.midi.type === 'cc') KNOB_A_STRIP.set(`${pc.midi.channel}:${pc.midi.number}`, Number(m[1]))
+}
+
+/** What a follow-managed knob writes to, or null when it is not soft-takeover material (stereo-linked, not a gain). */
+function knobTarget(m: Mapping | undefined): { component: string; control: string; min: number; max: number } | null {
+  const q = m?.qsys
+  if (!q || q.type !== 'component_control' || q.link || !q.component || !q.control) return null
+  return { component: q.component, control: q.control, min: q.min ?? 0, max: q.max ?? 1 }
+}
+
+const knobSig = (m: Mapping | undefined): string => {
+  const t = knobTarget(m)
+  return t ? `${t.component}|${t.control}|${t.min}|${t.max}` : ''
 }
 
 /** A lamp derived from a mapping: which control to watch, which note to light. */
@@ -109,6 +133,28 @@ export class MappingEngine {
 
   private recentActivity: string[] = []
 
+  // Follow-router: last routed input per output (1-8), and the callback fired
+  // when a route changes. The first state after (re)connect is a baseline and
+  // does not fire, so hand-edited Knob A mappings survive a restart.
+  private routes = new Map<number, number>()
+  private routesBaselined = false
+  // Set whenever the route picture was thrown away; the next completed baseline
+  // then re-arms the knobs and fires onBaselined once (rebuilds do neither).
+  private freshBaseline = true
+  onRouteChange?: (strip: number, input: number) => void
+  // Fired once per (re)baseline with follow enabled: the owner reconciles Knob A
+  // against the routes now known.
+  onBaselined?: () => void
+
+  // Soft takeover for follow-managed Knob A (absolute knobs): a knob whose
+  // strip was just pointed elsewhere is ignored until it reaches the target's
+  // current position, so a live source never jumps to the knob's position.
+  private gate = new PickupGate()
+  private disarmNotice = new Set<string>()
+  private readSeq = new Map<string, number>()
+  private lastReadAt = new Map<string, number>()
+  private now: () => number = () => Date.now()
+
   constructor(qrc: QrcClient, midi: MidiIO, config: Config) {
     this.qrc = qrc
     this.midi = midi
@@ -127,9 +173,7 @@ export class MappingEngine {
       this.ledMap.set(led.key, led.midi)
     }
 
-    if (config.feedback.enabled) {
-      this.qrc.on('notification', (_id: string, result: unknown) => this.handleNotification(result))
-    }
+    this.qrc.on('notification', (_id: string, result: unknown) => this.handleNotification(result))
   }
 
   handleCC(channel: number, cc: number, value: number): void {
@@ -144,6 +188,7 @@ export class MappingEngine {
     // Toggle buttons (mutes, rec arm) send CC 127 on press and CC 0 on release.
     // Ignore the 0 so we don't double-fire and immediately undo the toggle.
     if (mapping.qsys.type === 'toggle' && value === 0) return
+    if (this.followEnabled && !this.takeOver(`${channel}:${cc}`, mapping, value)) return
     this.execute(mapping, value).catch((err) => {
       console.error(`[Bridge] QRC error for "${mapping.label ?? 'unknown'}": ${err.message}`)
     })
@@ -168,9 +213,8 @@ export class MappingEngine {
   setQrc(qrc: QrcClient): void {
     this.qrc.removeAllListeners('notification')
     this.qrc = qrc
-    if (this.config.feedback.enabled) {
-      this.qrc.on('notification', (_id: string, result: unknown) => this.handleNotification(result))
-    }
+    this.resetRouteBaseline()
+    this.qrc.on('notification', (_id: string, result: unknown) => this.handleNotification(result))
   }
 
   /** Hot-reload mappings from a new config without restarting the app. */
@@ -180,6 +224,8 @@ export class MappingEngine {
     // button moves off a component nothing will ever arrive to clear the lamp
     // it left behind — it would sit lit for the rest of the show.
     const lit = [...this.ledMap].filter(([key]) => this.toggleState.get(key) === 1)
+    const wasFollow = this.followEnabled
+    const before = new Map(this.ccMap)
 
     this.ccMap.clear()
     this.noteMap.clear()
@@ -203,6 +249,16 @@ export class MappingEngine {
     }
 
     this.config = config
+
+    if (!this.followEnabled) {
+      if (wasFollow) this.resetRouteBaseline()
+    } else if (!wasFollow) {
+      // Nothing was tracked while it was off, so routes and knob positions are both unknown.
+      this.resetRouteBaseline()
+      this.rearmKnobs(KNOB_A_STRIP.keys())
+    } else {
+      this.rearmKnobs([...KNOB_A_STRIP.keys()].filter((k) => knobSig(before.get(k)) !== knobSig(this.ccMap.get(k))))
+    }
     console.log(`[Bridge] Mappings reloaded — ${this.ccMap.size} CC, ${this.noteMap.size} note, ${this.ledMap.size} LED`)
   }
 
@@ -210,8 +266,88 @@ export class MappingEngine {
     return this.recentActivity.slice()
   }
 
+  private get followEnabled(): boolean {
+    return this.config.follow_router?.enabled === true
+  }
+
+  /** True once follow is on and the Core's current routing has been read. */
+  get routesKnown(): boolean {
+    return this.followEnabled && this.routesBaselined
+  }
+
+  /**
+   * The route picture is unknown (new Core link, reconnect, follow just turned
+   * on): forget it, so the next poll is a baseline again, and put every knob
+   * back to "not yet picked up". A rebuild of the change group is NOT such a
+   * moment — the routes held across it are still valid, and resetting there
+   * would swallow the rest of a push that is still being processed.
+   */
+  resetRouteBaseline(): void {
+    this.routes.clear()
+    this.routesBaselined = false
+    this.freshBaseline = true
+    if (!this.followEnabled) {
+      this.gate = new PickupGate()
+      this.disarmNotice.clear()
+      return
+    }
+    for (const key of KNOB_A_STRIP.keys()) {
+      if (!knobTarget(this.ccMap.get(key))) continue
+      this.gate.disarm(key, null)
+      this.disarmNotice.delete(key)
+    }
+  }
+
+  /** Disarm these knobs and read each one's target from the Core (in parallel). */
+  private rearmKnobs(keys: Iterable<string>): void {
+    for (const key of keys) {
+      const t = knobTarget(this.ccMap.get(key))
+      if (!t) continue
+      this.gate.disarm(key, null)
+      this.disarmNotice.delete(key)
+      this.readKnobTarget(key, t)
+    }
+  }
+
+  private readKnobTarget(key: string, t: { component: string; control: string; min: number; max: number }): void {
+    const seq = (this.readSeq.get(key) ?? 0) + 1
+    this.readSeq.set(key, seq)
+    this.lastReadAt.set(key, this.now())
+    if (!this.qrc.isConnected) return
+    this.qrc.call('Component.Get', { Name: t.component, Controls: [{ Name: t.control }] })
+      .then((res) => {
+        // A newer read (the strip moved again meanwhile) owns the answer.
+        if (this.readSeq.get(key) !== seq) return
+        const controls = (res as { Controls?: Array<{ Name?: string; Value?: unknown }> } | undefined)?.Controls
+        const value = (controls?.find((c) => c.Name === t.control) ?? controls?.[0])?.Value
+        if (typeof value === 'number') this.gate.setTarget(key, valueToCc(value, t.min, t.max))
+      })
+      .catch((err) => console.error(`[Bridge] Could not read ${t.component}:${t.control} for soft takeover: ${err.message}`))
+  }
+
+  /** false => drop this CC: the knob has not yet reached the strip's current value. */
+  private takeOver(key: string, mapping: Mapping, value: number): boolean {
+    const strip = KNOB_A_STRIP.get(key)
+    const t = strip ? knobTarget(mapping) : null
+    if (!strip || !t) return true
+    if (this.gate.accept(key, value)) return true
+    const target = this.gate.pendingTarget(key)
+    if (target === null) {
+      if (this.now() - (this.lastReadAt.get(key) ?? 0) >= TARGET_READ_RETRY_MS) this.readKnobTarget(key, t)
+    } else if (!this.disarmNotice.has(key)) {
+      this.disarmNotice.add(key)
+      this.log(`Knob A ${strip} — move to about ${target}/127 to take over`)
+    }
+    return false
+  }
+
+  private get followRouter() {
+    return resolveFollowConfig(this.config.follow_router)
+  }
+
   async setupChangeGroup(): Promise<void> {
-    if (!this.config.feedback.enabled) return
+    const follow = this.followRouter
+    if (!this.config.feedback.enabled && !follow.enabled) return
 
     // AddComponentControl accumulates on a group id, so re-subscribing after a
     // reload would leave the component a button was reassigned away from
@@ -221,14 +357,21 @@ export class MappingEngine {
     await this.qrc.call('ChangeGroup.Destroy', { Id: CHANGE_GROUP_ID })
       .catch((err) => console.log(`[Bridge] No existing ChangeGroup to destroy (${err.message})`))
 
-    if (this.ledMap.size === 0) return
+    const leds = this.config.feedback.enabled ? deriveLeds(this.config) : []
+    if (leds.length === 0 && !follow.enabled) return
 
-    // Group controls by component for the ChangeGroup subscription
+    // Group controls by component for the ChangeGroup subscription. Everything
+    // goes into the one existing group: the Core has a small change-group budget.
     const byComponent = new Map<string, string[]>()
-    for (const led of deriveLeds(this.config)) {
+    for (const led of leds) {
       if (!byComponent.has(led.component)) byComponent.set(led.component, [])
       const controls = byComponent.get(led.component)!
       if (!controls.includes(led.control)) controls.push(led.control)
+    }
+    if (follow.enabled) {
+      const controls = byComponent.get(follow.router) ?? []
+      for (const c of watchedCrosspoints()) if (!controls.includes(c)) controls.push(c)
+      byComponent.set(follow.router, controls)
     }
 
     for (const [component, controls] of byComponent) {
@@ -247,15 +390,35 @@ export class MappingEngine {
       Rate: 0.05,
     }).catch((err) => console.error(`[Bridge] ChangeGroup AutoPoll failed: ${err.message}`))
 
-    // Immediate poll to sync initial LED state on connect
+    // Immediate poll to sync initial LED / route state on connect
     const initial = await this.qrc.call('ChangeGroup.Poll', { Id: CHANGE_GROUP_ID })
       .catch((err) => {
         console.error(`[Bridge] Initial ChangeGroup.Poll failed: ${err.message}`)
         return null
       })
     if (initial) this.handleNotification(initial)
+    // Whatever the poll returned is the baseline; later changes are real route changes.
+    this.routesBaselined = true
+    if (this.followEnabled && this.freshBaseline) {
+      this.freshBaseline = false
+      this.rearmKnobs(KNOB_A_STRIP.keys())
+      this.onBaselined?.()
+    }
 
     console.log('[Bridge] ChangeGroup feedback active')
+  }
+
+  /** Current route per strip, as last seen from the Core. */
+  getRoutes(): Map<number, number> {
+    return new Map(this.routes)
+  }
+
+  /** Read the router fresh from the Core (used by the Auto-map button). */
+  async readRoutes(): Promise<Map<number, number>> {
+    if (!this.qrc.isConnected) throw new Error('Q-SYS not connected — check host in config.json')
+    const result = await this.qrc.call('Component.GetControls', { Name: this.followRouter.router }) as
+      { Controls?: Array<{ Name: string; Value?: unknown }> } | undefined
+    return routesFromControls(result?.Controls ?? [])
   }
 
   syncLEDs(): void {
@@ -281,7 +444,14 @@ export class MappingEngine {
     if (r.Changes.length === 0) return
     console.log('[Bridge] handleNotification:', JSON.stringify(r.Changes).slice(0, 200))
 
+    const follow = this.followRouter
     for (const change of r.Changes) {
+      // A crosspoint is route state, not a lamp or toggle: keep it out of toggleState.
+      if (follow.enabled && change.Component === follow.router) {
+        this.trackRoute(change)
+        continue
+      }
+      if (!this.config.feedback.enabled) continue
       const key = `${change.Component}:${change.Name}`
       const val = change.Value > 0 ? 1 : 0
       this.toggleState.set(key, val)
@@ -294,6 +464,18 @@ export class MappingEngine {
         this.midi.sendNoteOff(led.channel, led.note)
       }
     }
+  }
+
+  private trackRoute(change: { Component: string; Name: string; Value: number }): void {
+    const follow = this.followRouter
+    if (!follow.enabled || change.Component !== follow.router) return
+    const cp = parseCrosspoint(change.Name)
+    if (!cp || cp.output < 1 || cp.output > STRIPS) return
+    // A route change flips two crosspoints (old off, new on); only the "on" matters.
+    if (!(change.Value > 0)) return
+    const previous = this.routes.get(cp.output)
+    this.routes.set(cp.output, cp.input)
+    if (this.routesBaselined && previous !== cp.input) this.onRouteChange?.(cp.output, cp.input)
   }
 
   private async execute(mapping: Mapping, midiValue: number): Promise<void> {

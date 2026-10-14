@@ -10,6 +10,8 @@ import crypto from 'node:crypto'
 import { QrcClient } from './qrc-client.js'
 import { stripComments } from './config.js'
 import type { Mapping } from './config.js'
+import { resolveFollowConfig } from './router-follow.js'
+import type { FollowRouterConfig } from './router-follow.js'
 
 // The physical surface lives in physical-surface.ts, which the mapping
 // engine also reads for lamp notes. Re-exported so existing importers of
@@ -88,6 +90,20 @@ export function saveMappingsIfFresh(configFilePath: string, mappings: Mapping[],
   }
   saveMappings(configFilePath, mappings)
   return getMappingsRevision(configFilePath)
+}
+
+/** Read the follow_router block (defaults filled in). */
+export function loadFollowRouter(configFilePath: string): FollowRouterConfig {
+  const config = parseConfigFile(fs.readFileSync(configFilePath, 'utf-8'))
+  return resolveFollowConfig(config.follow_router as Partial<FollowRouterConfig> | undefined)
+}
+
+/** Flip follow_router.enabled, leaving every other key in the config alone. */
+export function saveFollowRouterEnabled(configFilePath: string, enabled: boolean): void {
+  const config = parseConfigFile(fs.readFileSync(configFilePath, 'utf-8'))
+  const current = (config.follow_router as Record<string, unknown> | undefined) ?? {}
+  config.follow_router = { ...current, enabled }
+  fs.writeFileSync(configFilePath, JSON.stringify(config, null, 2), 'utf-8')
 }
 
 export async function saveAndApplyMappings(

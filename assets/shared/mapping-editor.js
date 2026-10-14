@@ -63,6 +63,12 @@
     dl.innerHTML = controls.map(c => '<option value="' + esc(c.name) + '">').join('')
   }
 
+  // Knob A 1-8: the rows the bridge re-points itself while Follow input router
+  // is on. Keyed off the physical control's group and label, not CC numbers.
+  function isFollowManaged(pc) {
+    return pc.group === 'Knobs A' && /^Knob A [1-8]$/.test(pc.label)
+  }
+
   function el(tag, props) {
     const e = document.createElement(tag)
     if (props) Object.assign(e, props)
@@ -90,6 +96,10 @@
     // unblurred edit), so the change event needs this to tell a first fill
     // from an edit of an existing name.
     const committedCtrl = new Map()
+    // While true, Knob A 1-8 rows are read-only (the bridge owns their targets).
+    // The rows stay in `assignments`, so a save still carries them unchanged.
+    let followLocked = !!opts.followLocked
+    const isLocked = pc => followLocked && !!pc && isFollowManaged(pc)
 
     // Mappings this editor cannot show as a row. Saving rewrites the whole
     // array, so anything missing from buildMappings' output is deleted from
@@ -198,6 +208,14 @@
       return sel
     }
 
+    const LOCK_NOTE = 'Managed by Follow router \u2014 turn Follow off to edit'
+
+    function lockInputs(row) {
+      for (const tag of ['select', 'input', 'button']) {
+        for (const c of row.querySelectorAll(tag)) c.disabled = true
+      }
+    }
+
     function cell(row, className) {
       const td = el('td')
       if (className) td.className = className
@@ -209,11 +227,14 @@
       const isToggle = pc.controlType === 'toggle'
       const row = el('tr', { className: 'ctrl-row' + (a && a.component ? ' assigned' : '') })
       row.dataset.id = pc.id
+      const locked = isLocked(pc)
+      if (locked) row.classList.add('locked')
 
       const tdLabel = cell(row, 'td-label')
       // Only call it the "L" leg once there's an "R" leg to tell it apart from.
       if (a && a.link) tdLabel.appendChild(el('span', { className: 'leg', textContent: 'L' }))
       tdLabel.appendChild(el('span', { textContent: pc.label }))
+      if (locked) tdLabel.appendChild(el('span', { className: 'lock-note', textContent: LOCK_NOTE }))
 
       const tdType = cell(row, 'td-type')
       tdType.appendChild(el('span', { className: 'badge badge-' + pc.controlType, textContent: pc.controlType }))
@@ -255,6 +276,7 @@
       cell(row, 'td-clear').appendChild(clearBtn)
 
       if (a && a.component) fillDatalist(dl, a.component)
+      if (locked) lockInputs(row)
       return row
     }
 
@@ -292,6 +314,7 @@
       cell(row)
 
       fillDatalist(dl, a.link.component || a.component)
+      if (isLocked(pc)) { row.classList.add('locked'); lockInputs(row) }
       return row
     }
 
@@ -340,12 +363,14 @@
       if (a && a.link) fresh.after(buildLinkRowElement(pc, a))
     }
 
+    function isLockedId(id) { return isLocked(physicalControls.find(p => p.id === id)) }
+
     // Delegated from tbody. Typing (input) never re-renders, so the user's
     // caret survives; structural changes re-render only the affected row.
     tbody.addEventListener('change', async e => {
       const t = e.target
       const id = t.dataset && t.dataset.id
-      if (!id) return
+      if (!id || isLockedId(id)) return
       if (t.classList.contains('comp-sel')) {
         const componentName = t.value
         committedCtrl.delete(id)
@@ -392,7 +417,7 @@
     tbody.addEventListener('input', e => {
       const t = e.target
       const id = t.dataset && t.dataset.id
-      if (!id) return
+      if (!id || isLockedId(id)) return
       const a = assignments.get(id) || {}
       if (t.classList.contains('lnk-ctrl-input')) {
         if (!a.link) return
@@ -409,7 +434,7 @@
 
     tbody.addEventListener('click', e => {
       const btn = e.target.closest && e.target.closest('.clear-btn')
-      if (!btn) return
+      if (!btn || isLockedId(btn.dataset.id)) return
       committedCtrl.delete(btn.dataset.id)
       assignments.delete(btn.dataset.id)
       renderRow(btn.dataset.id)
@@ -419,6 +444,10 @@
 
     return {
       root,
+      setFollowLocked(on) {
+        followLocked = !!on
+        renderTable()
+      },
       __internals: { assignments, unrepresented, view, ctrlCache, renderTable, renderRow, renderLinkRow, populateDatalist },
     }
   }
@@ -449,6 +478,8 @@
     // When the initial load fails the table is empty. Saving that would wipe
     // the stored mappings, so saves are refused until a load succeeds.
     let loadFailed = false
+    // Survives reload and rebuilds: install() hands it to every new editor.
+    let followLocked = false
 
     const toolbar = el('div', { className: 'me-toolbar' })
     const tabs = el('div', { className: 'me-tabs' })
@@ -514,6 +545,7 @@
         physicalControls,
         components,
         view,
+        followLocked,
         getControls: name => Promise.resolve(adapter.getComponentControls(name)).then(naturalSort),
         ...extra,
       })
@@ -589,6 +621,12 @@
       saveAndApply: () => send('saveAndApply', 'Applying…', 'Applied'),
       reload: load,
       refreshComponents,
+      // Follow input router on: Knob A 1-8 rows turn read-only. Call on load
+      // once the follow state is known and again whenever it changes.
+      setFollowLocked(on) {
+        followLocked = !!on
+        if (editor) editor.setFollowLocked(followLocked)
+      },
     }
 
     host.textContent = ''

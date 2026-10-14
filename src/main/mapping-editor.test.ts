@@ -954,3 +954,105 @@ test('the shared module stays a classic script', () => {
   assert.doesNotMatch(SHARED_SRC, /^\s*(?:import|export)\b/m)
   assert.doesNotMatch(SHARED_SRC, /\b(?:require|import)\s*\(/)
 })
+
+// ---- Follow input router: Knob A rows are read-only ----------------------
+
+const KNOB_A9 = { id: 'Ka9', label: 'Knob A 9', group: 'Knobs A', controlType: 'knob', midi: { type: 'cc', channel: 4, number: 30 } }
+const FOLLOW_PCS = [KNOB_A1, KNOB_A2, KNOB_A9, MUTE_1]
+
+const followState = (over: any = {}) => ({
+  loadEditorState: async () => ({
+    physicalControls: FOLLOW_PCS,
+    mappings: [mapped(KNOB_A1, GAIN.name), mapped(KNOB_A2, GAIN3.name), mapped(KNOB_A9, GAIN.name)],
+  }),
+  ...over,
+})
+
+const controlsIn = (row: any) =>
+  ['select', 'input', 'button'].flatMap(tag => row.querySelectorAll(tag))
+const lockedInputs = (ed: any, id: string) => controlsIn(rowOf(ed, id)).map((c: any) => c.disabled)
+
+test('Knob A 1-8 rows are locked while follow is on, and others are not', async () => {
+  const ed = await mountWith(followState())
+  ed.setFollowLocked(true)
+  for (const id of ['Ka1', 'Ka2']) {
+    assert.ok(hasClass(rowOf(ed, id), 'locked'), id)
+    assert.ok(lockedInputs(ed, id).every((d: boolean) => d), id + ' every control disabled')
+    assert.match(rowOf(ed, id).textContent, /Managed by Follow router/)
+  }
+  for (const id of ['Ka9', 'M1']) {
+    assert.ok(!hasClass(rowOf(ed, id), 'locked'), id + ' is not a managed strip')
+    assert.doesNotMatch(rowOf(ed, id).textContent, /Managed by Follow router/)
+  }
+  assert.equal(rowOf(ed, 'Ka9').querySelector('.comp-sel').disabled, false)
+})
+
+test('turning follow off unlocks the rows again', async () => {
+  const ed = await mountWith(followState())
+  ed.setFollowLocked(true)
+  ed.setFollowLocked(false)
+  assert.ok(!hasClass(rowOf(ed, 'Ka1'), 'locked'))
+  assert.equal(rowOf(ed, 'Ka1').querySelector('.comp-sel').disabled, false)
+  assert.equal(rowOf(ed, 'Ka1').querySelector('.clear-btn').disabled, false)
+  assert.doesNotMatch(rowOf(ed, 'Ka1').textContent, /Managed by Follow router/)
+})
+
+test('a locked ganged Knob A row locks its linked leg too', async () => {
+  const ed = await mountWith(followState({
+    loadEditorState: async () => ({ physicalControls: [KNOB_A1],
+      mappings: [mapped(KNOB_A1, GAIN.name, { link: { component: GAIN3.name } })] }),
+  }))
+  ed.setFollowLocked(true)
+  const leg = ed.root.querySelector('tr.link-row[data-id="Ka1"]')
+  assert.ok(controlsIn(leg).every((c: any) => c.disabled))
+})
+
+test('locked rows ignore edit events and still save unchanged', async () => {
+  let sent: any
+  const ed = await mountWith(followState({
+    save: async (m: any) => { sent = JSON.parse(JSON.stringify(m)); return { count: m.length } },
+  }))
+  ed.setFollowLocked(true)
+  // A stray event (e.g. from a stale DOM) must not touch a managed row.
+  const sel = rowOf(ed, 'Ka1').querySelector('.comp-sel')
+  sel.value = ''
+  await fireEvent(sel, 'change')
+  await fireEvent(rowOf(ed, 'Ka2').querySelector('.clear-btn'), 'click')
+  await ed.save()
+  assert.equal(sent.length, 3, 'locked rows are still in the payload')
+  assert.deepEqual(sent.map((m: any) => m.qsys.component), [GAIN.name, GAIN3.name, GAIN.name])
+  assert.deepEqual(sent.map((m: any) => m.label), ['Knob A 1', 'Knob A 2', 'Knob A 9'])
+})
+
+test('the lock survives reload and refreshComponents', async () => {
+  const ed = await mountWith(followState())
+  ed.setFollowLocked(true)
+  await ed.reload()
+  assert.ok(hasClass(rowOf(ed, 'Ka1'), 'locked'), 'after reload')
+  assert.equal(rowOf(ed, 'Ka1').querySelector('.comp-sel').disabled, true)
+  await ed.refreshComponents()
+  assert.ok(hasClass(rowOf(ed, 'Ka2'), 'locked'), 'after refreshComponents')
+  ed.setFollowLocked(false)
+  await ed.reload()
+  assert.ok(!hasClass(rowOf(ed, 'Ka1'), 'locked'), 'unlock also survives reload')
+})
+
+test('the lock survives a filter or tab re-render', async () => {
+  const ed = await mountWith(followState())
+  ed.setFollowLocked(true)
+  ed.__internals.view.text = 'Knob A'
+  ed.__internals.renderTable()
+  assert.ok(hasClass(rowOf(ed, 'Ka1'), 'locked'))
+})
+
+test('setFollowLocked before the first mapping is fine and a reload keeps reflecting reloaded data', async () => {
+  let n = 0
+  const ed = await mountWith(followState({
+    loadEditorState: async () => ({ physicalControls: [KNOB_A1],
+      mappings: [mapped(KNOB_A1, n++ ? GAIN3.name : GAIN.name)] }),
+  }))
+  ed.setFollowLocked(true)
+  await ed.reload()   // the bridge re-pointed Knob A in the background
+  assert.equal(rowOf(ed, 'Ka1').querySelector('.comp-sel').value, GAIN3.name)
+  assert.ok(hasClass(rowOf(ed, 'Ka1'), 'locked'))
+})

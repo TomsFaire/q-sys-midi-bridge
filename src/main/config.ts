@@ -68,6 +68,9 @@ export interface Config {
   // UCI web server (serves foh-uci.html + relays browser WS to the Core).
   // Defaults when absent: enabled: true, port: 3001.
   uci?: { enabled?: boolean; port?: number; mappingsPasswordHash?: string }
+  // When enabled, Knob A 1-8 follow the Input.Router: each is pointed at the
+  // gain control of the source routed to Mic N. See router-follow.ts.
+  follow_router?: Partial<import('./router-follow.js').FollowRouterConfig>
   // Which saved show was last recalled. Written by the recall, and left alone
   // by an ordinary mapping save — so an edit after a recall leaves this
   // pointing at the show the mappings came from, which is what lets the UI

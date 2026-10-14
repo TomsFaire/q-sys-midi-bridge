@@ -23,6 +23,7 @@ import {
   saveMappingsIfFresh,
   saveAndApplyMappingsIfFresh,
 } from './mapping-service.js'
+import type { FollowRouterControl } from './router-follow.js'
 
 // ── Configurator class ────────────────────────────────────────────────────────
 
@@ -43,6 +44,7 @@ export class Configurator {
     // Credentials for a Core with Access Control enabled — discovery needs to
     // log on just like the bridge does, or component lists come back empty.
     private readonly credentials?: QrcCredentials,
+    private readonly followRouter?: FollowRouterControl,
   ) {
     this.registerIpc()
   }
@@ -169,6 +171,20 @@ export class Configurator {
     ipcMain.handle('cfg:save-and-apply', async (_event, mappings: Mapping[], revision: unknown) => ({
       revision: await saveAndApplyMappingsIfFresh(this.configFilePath, mappings, revision, this.onReload),
     }))
+
+    // ── Follow input router (Knob A) ────────────────────────────────────────
+    ipcMain.handle('cfg:get-follow-router', () => ({
+      available: !!this.followRouter,
+      enabled: this.followRouter?.isEnabled() ?? false,
+    }))
+    ipcMain.handle('cfg:set-follow-router', async (_event, enabled: boolean) => {
+      if (!this.followRouter) throw new Error('Bridge is not running')
+      await this.followRouter.setEnabled(enabled === true)
+    })
+    ipcMain.handle('cfg:auto-map-knob-a', () => {
+      if (!this.followRouter) throw new Error('Bridge is not running')
+      return this.followRouter.autoMap()
+    })
 
     // ── Network info (UCI web server LAN URL) ───────────────────────────────
     ipcMain.handle('cfg:get-network-info', () => {
