@@ -33,8 +33,19 @@ export interface ShowSummary {
   count: number
 }
 
+/** The show, or its id, does not exist. HTTP maps this to 404. */
+export class ShowNotFoundError extends Error {}
+/** The id, name or show contents are unusable. HTTP maps this to 400. */
+export class ShowValidationError extends Error {}
+
+/** The config write succeeded but the follow-up reload threw: the surface DID change. */
+export class RecallReloadError extends Error {}
+
 const SCHEMA = 1 as const
 const MAX_SLUG = 64
+const ID_PATTERN = /^[a-z0-9-]+$/
+/** Stray filenames already logged, so the tray's refreshes don't repeat the warning. */
+const warnedStray = new Set<string>()
 /** Backups kept per shows directory. Twenty is a long night. */
 const KEEP_BACKUPS = 20
 
@@ -53,7 +64,7 @@ export function slugify(name: string): string {
     .replace(/^-+|-+$/g, '')
     .slice(0, MAX_SLUG)
     .replace(/-+$/, '')
-  if (!slug) throw new Error(`"${name}" is not a usable show name`)
+  if (!slug) throw new ShowValidationError(`"${name}" is not a usable show name`)
   return slug
 }
 
@@ -65,8 +76,8 @@ export function slugify(name: string): string {
  */
 function showPath(showsDir: string, id: string): string {
   const clean = String(id ?? '')
-  if (!clean || clean.includes('..') || /[\\/\0]/.test(clean) || !/^[a-z0-9-]+$/.test(clean)) {
-    throw new Error(`"${id}" is not a valid show id`)
+  if (!clean || clean.includes('..') || /[\\/\0]/.test(clean) || !ID_PATTERN.test(clean)) {
+    throw new ShowValidationError(`"${id}" is not a valid show id`)
   }
   return path.join(showsDir, `${clean}.json`)
 }
@@ -100,10 +111,20 @@ export function listShows(showsDir: string): ShowSummary[] {
   const shows: ShowSummary[] = []
   for (const file of names) {
     if (!file.endsWith('.json')) continue // skips the .tmp of a half-written save
+    const id = file.slice(0, -'.json'.length)
+    // A copied "Gala 2026.json" would list but never recall, since showPath
+    // only accepts slug ids. Better absent than a dead menu entry.
+    if (!ID_PATTERN.test(id)) {
+      if (!warnedStray.has(file)) {
+        warnedStray.add(file)
+        console.warn(`[Shows] Ignoring "${file}" in ${showsDir} — rename it to lowercase letters, digits and hyphens to use it`)
+      }
+      continue
+    }
     try {
       const show = parseShow(fs.readFileSync(path.join(showsDir, file), 'utf-8'))
       shows.push({
-        id: file.slice(0, -'.json'.length),
+        id,
         name: show.name,
         savedAt: show.savedAt,
         count: show.mappings.length,
@@ -122,12 +143,12 @@ export function readShow(showsDir: string, id: string): Show {
   try {
     raw = fs.readFileSync(file, 'utf-8')
   } catch {
-    throw new Error(`Show "${id}" not found`)
+    throw new ShowNotFoundError(`Show "${id}" not found`)
   }
   try {
     return parseShow(raw)
   } catch (err) {
-    throw new Error(`Show "${id}" could not be read: ${(err as Error).message}`)
+    throw new ShowValidationError(`Show "${id}" could not be read: ${(err as Error).message}`)
   }
 }
 
@@ -157,7 +178,7 @@ export function writeShow(showsDir: string, name: string, mappings: Mapping[]): 
 /** Removes a show. Refuses an id that is not there rather than succeeding quietly. */
 export function deleteShow(showsDir: string, id: string): void {
   const file = showPath(showsDir, id)
-  if (!fs.existsSync(file)) throw new Error(`Show "${id}" not found`)
+  if (!fs.existsSync(file)) throw new ShowNotFoundError(`Show "${id}" not found`)
   fs.unlinkSync(file)
 }
 
@@ -173,7 +194,12 @@ export function autoDirFor(showsDir: string): string {
 
 /** Backups, newest first. They are ordinary show files, so undo is just a recall. */
 export function listAutoBackups(autoDir: string): Array<ShowSummary & { mappings: Mapping[] }> {
-  return listShows(autoDir).map((s) => ({ ...s, mappings: readShow(autoDir, s.id).mappings }))
+  const out: Array<ShowSummary & { mappings: Mapping[] }> = []
+  for (const s of listShows(autoDir)) {
+    // A backup that vanished or went bad since the listing is skipped, not thrown.
+    try { out.push({ ...s, mappings: readShow(autoDir, s.id).mappings }) } catch { /* skip */ }
+  }
+  return out
 }
 
 /** Keeps the newest `keep` backups. A busy night should not fill the disk. */
@@ -206,7 +232,7 @@ export async function recallShow(
   const check = validateMappings(show.mappings)
   if (!check.valid) {
     const detail = check.errors.map((e) => `#${e.index}: ${e.reason}`).join('; ')
-    throw new Error(`Show "${show.name}" is not valid and was not applied — ${detail}`)
+    throw new ShowValidationError(`Show "${show.name}" is not valid and was not applied — ${detail}`)
   }
 
   const autoDir = autoDirFor(showsDir)
@@ -225,7 +251,13 @@ export async function recallShow(
     mappings: check.mappings,
     activeShow: { id, name: show.name, appliedAt: new Date().toISOString() },
   })
-  if (onReload) await onReload()
+  if (onReload) {
+    try {
+      await onReload()
+    } catch (err) {
+      throw new RecallReloadError(`"${show.name}" was written but reloading the bridge failed: ${(err as Error).message}`)
+    }
+  }
 
   return { id, name: show.name, count: check.mappings.length, backupId }
 }

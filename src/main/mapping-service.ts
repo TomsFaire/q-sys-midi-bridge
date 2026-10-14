@@ -6,6 +6,7 @@
  */
 
 import fs from 'node:fs'
+import crypto from 'node:crypto'
 import { QrcClient } from './qrc-client.js'
 import { stripComments } from './config.js'
 import type { Mapping } from './config.js'
@@ -20,6 +21,20 @@ export { PHYSICAL_CONTROLS } from './physical-surface.js'
 
 function parseConfigFile(raw: string): Record<string, unknown> {
   return JSON.parse(stripComments(raw)) as Record<string, unknown>
+}
+
+/**
+ * Fingerprint of the config as it stands on disk — a sha1 of its contents.
+ * Unlike mtime+size it cannot miss a same-size rewrite inside one timestamp
+ * tick. Shared by the HTTP page and the Configurator window so both compare
+ * the same thing. A missing file yields a stable sentinel rather than throwing.
+ */
+export function getMappingsRevision(configPath: string): string {
+  try {
+    return crypto.createHash('sha1').update(fs.readFileSync(configPath)).digest('hex')
+  } catch {
+    return 'missing'
+  }
 }
 
 export function loadMappings(configFilePath: string): Mapping[] {

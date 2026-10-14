@@ -14,13 +14,14 @@ import { verifyPassword, SessionStore } from './auth.js'
 import {
   PHYSICAL_CONTROLS,
   loadMappings,
+  getMappingsRevision,
   saveMappings,
   saveAndApplyMappings,
   validateMappings,
   discoverComponents,
   getComponentControls,
 } from './mapping-service.js'
-import { listShows, writeShow, deleteShow, recallShow } from './show-service.js'
+import { listShows, writeShow, deleteShow, recallShow, RecallReloadError, ShowNotFoundError, ShowValidationError } from './show-service.js'
 
 const SESSION_COOKIE = 'mqb_mappings_session'
 
@@ -36,7 +37,7 @@ export class MappingsHttpHandler {
   ) {}
 
   /**
-   * A cheap fingerprint of the config as it stands on disk.
+   * A fingerprint (content hash) of the config as it stands on disk.
    *
    * The page POSTs its whole in-memory array, so a tab left open across a
    * recall holds a pre-recall snapshot and its next save would silently
@@ -44,8 +45,7 @@ export class MappingsHttpHandler {
    * turns that into a 409 the page can act on.
    */
   private revision(): string {
-    const s = fs.statSync(this.configFilePath)
-    return `${s.mtimeMs}:${s.size}`
+    return getMappingsRevision(this.configFilePath)
   }
 
   /**
@@ -68,6 +68,13 @@ export class MappingsHttpHandler {
     } catch {
       return null
     }
+  }
+
+  /** Typed errors from show-service become 404/400; anything else is our fault. */
+  private statusFor(err: unknown): number {
+    if (err instanceof ShowNotFoundError) return 404
+    if (err instanceof ShowValidationError) return 400
+    return 500
   }
 
   private sendStale(res: http.ServerResponse): void {
@@ -258,12 +265,25 @@ export class MappingsHttpHandler {
       if (!this.showsDir) { this.sendJson(res, 503, { error: 'Shows are not available' }); return true }
       let id: string
       try { id = decodeURIComponent(recall[1]) } catch { this.sendJson(res, 400, { error: 'Bad show id' }); return true }
-      recallShow(this.showsDir, id, this.configFilePath, this.onReload)
-        .then((r) => this.sendJson(res, 200, { ok: true, ...r, revision: this.revision() }))
-        .catch((err) => {
-          const message = (err as Error).message
-          this.sendJson(res, /not found/i.test(message) ? 404 : 400, { error: message })
-        })
+      const showsDir = this.showsDir
+      ;(async () => {
+        // Past recallShow's config write the surface HAS changed, so nothing
+        // after it may be reported as a client error.
+        let r: Awaited<ReturnType<typeof recallShow>>
+        try {
+          r = await recallShow(showsDir, id, this.configFilePath, this.onReload)
+        } catch (err) {
+          if (err instanceof RecallReloadError) {
+            this.sendJson(res, 500, { error: err.message, applied: true, revision: getMappingsRevision(this.configFilePath) })
+          } else {
+            this.sendJson(res, this.statusFor(err), { error: (err as Error).message })
+          }
+          return
+        }
+        this.sendJson(res, 200, { ok: true, ...r, revision: this.revision() })
+      })().catch((err) => {
+        if (!res.headersSent) this.sendJson(res, 500, { error: (err as Error).message, applied: true })
+      })
       return true
     }
 
@@ -274,7 +294,7 @@ export class MappingsHttpHandler {
         deleteShow(this.showsDir, decodeURIComponent(show[1]))
         this.sendJson(res, 200, { ok: true })
       } catch (err) {
-        this.sendJson(res, 404, { error: (err as Error).message })
+        this.sendJson(res, this.statusFor(err), { error: (err as Error).message })
       }
       return true
     }

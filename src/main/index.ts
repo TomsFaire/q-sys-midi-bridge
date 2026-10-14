@@ -6,6 +6,7 @@
  */
 
 import { app, Tray, Menu, nativeImage, shell, clipboard, powerSaveBlocker } from 'electron'
+import fs from 'node:fs'
 import path from 'node:path'
 import { loadConfig, getConfigPath, findConfigPath, getShowsDir, seedUserConfig } from './config.js'
 import { listShows, writeShow, recallShow, listAutoBackups, autoDirFor } from './show-service.js'
@@ -71,8 +72,15 @@ app.whenReady().then(async () => {
   // which also runs on a 3s timer. A readdir plus a parse per show every three
   // seconds, forever, on a machine whose whole job is not to glitch during a
   // show, is not a trade worth making.
-  let cachedShows = listShows(showsDir)
-  let cachedBackups = listAutoBackups(autoDirFor(showsDir))
+  let cachedShows: ReturnType<typeof listShows> = []
+  let cachedBackups: ReturnType<typeof listAutoBackups> = []
+  try {
+    cachedShows = listShows(showsDir)
+    cachedBackups = listAutoBackups(autoDirFor(showsDir))
+  } catch (err) {
+    // Must never stop tray and bridge setup below from running.
+    console.error(`[Shows] Initial show list failed: ${(err as Error).message}`)
+  }
   let showError: string | null = null
   let menuOpen = false
 
@@ -253,7 +261,10 @@ app.whenReady().then(async () => {
         ...showItems,
         { type: 'separator' },
         { label: 'Save Current as Show', click: () => saveShowFromTray() },
-        { label: 'Open Shows Folder', click: () => { shell.openPath(showsDir) } },
+        { label: 'Open Shows Folder', click: () => {
+          try { fs.mkdirSync(showsDir, { recursive: true }) } catch { /* openPath reports it */ }
+          shell.openPath(showsDir)
+        } },
       ],
     })
     if (showError) items.push({ label: `  ${showError.slice(0, 70)}`, enabled: false })

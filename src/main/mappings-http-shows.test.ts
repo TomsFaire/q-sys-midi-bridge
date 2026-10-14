@@ -20,6 +20,7 @@ import path from 'node:path'
 import http from 'node:http'
 import { MappingsHttpHandler } from './mappings-http.js'
 import { hashPassword } from './auth.js'
+import { getMappingsRevision } from './mapping-service.js'
 import type { Mapping, Config } from './config.js'
 
 const MUTE_1: Mapping = {
@@ -45,7 +46,7 @@ interface Rig {
 }
 
 /** A live server over a temp config, already logged in. */
-async function rig(mappings: Mapping[] = [MUTE_1]): Promise<Rig> {
+async function rig(mappings: Mapping[] = [MUTE_1], onReload?: () => Promise<void>): Promise<Rig> {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mqb-http-'))
   const showsDir = path.join(root, 'shows')
   const configFile = path.join(root, 'config.json')
@@ -62,7 +63,7 @@ async function rig(mappings: Mapping[] = [MUTE_1]): Promise<Rig> {
   const handler = new MappingsHttpHandler(
     configFile,
     path.join(root, 'missing.html'),
-    async () => { reloads++ },
+    async () => { reloads++; await onReload?.() },
     showsDir,
   )
   const server = http.createServer((req, res) => {
@@ -218,9 +219,81 @@ test('recalling a show that is not there is a 404', async () => {
 test('every shows route needs a session', async () => {
   const r = await rig()
   try {
-    for (const [method, p] of [['GET', '/api/mappings/shows'], ['POST', '/api/mappings/shows/gala/recall']] as const) {
+    for (const [method, p] of [
+      ['GET', '/api/mappings/shows'],
+      ['POST', '/api/mappings/shows'],
+      ['POST', '/api/mappings/shows/gala/recall'],
+      ['DELETE', '/api/mappings/shows/gala'],
+    ] as const) {
       const res = await fetch(r.base + p, { method })
       assert.equal(res.status, 401, `${method} ${p} should require auth`)
     }
+  } finally { await r.close() }
+})
+
+test('DELETE removes a show, 404s a missing one, and cannot escape the shows dir', async () => {
+  const r = await rig()
+  try {
+    await post(r, '/api/mappings/shows', { name: 'Gala', mappings: [MUTE_7] })
+    const del = (p: string) => fetch(r.base + p, { method: 'DELETE', headers: { cookie: r.cookie } })
+
+    assert.equal((await del('/api/mappings/shows/gala')).status, 200)
+    assert.deepEqual((await (await get(r, '/api/mappings/shows')).json()).shows, [])
+    assert.equal((await del('/api/mappings/shows/gala')).status, 404)
+
+    // A sibling file outside shows/ that a traversal would hit.
+    const outside = path.join(path.dirname(r.showsDir), 'victim.json')
+    fs.writeFileSync(outside, '{}')
+    for (const bad of ['..%2Fvictim', '%2e%2e%2fvictim', '..', 'a%5Cb']) {
+      const res = await del(`/api/mappings/shows/${bad}`)
+      assert.ok(res.status >= 400 && res.status < 500, `${bad} should be refused, got ${res.status}`)
+    }
+    assert.ok(fs.existsSync(outside), 'a traversal id must not delete files outside shows/')
+    assert.ok(fs.existsSync(r.configFile))
+  } finally { await r.close() }
+})
+
+test('an invalid show id on recall is a 400, not a 404', async () => {
+  const r = await rig()
+  try {
+    assert.equal((await post(r, '/api/mappings/shows/BAD_ID/recall')).status, 400)
+  } finally { await r.close() }
+})
+
+test('a backup/IO failure during recall is a 500, not a 400', async () => {
+  const r = await rig()
+  try {
+    await post(r, '/api/mappings/shows', { name: 'Gala', mappings: [MUTE_7] })
+    // A file where the _auto directory must go makes the backup fail.
+    fs.writeFileSync(path.join(r.showsDir, '_auto'), 'not a directory')
+    const res = await post(r, '/api/mappings/shows/gala/recall')
+    assert.equal(res.status, 500)
+    assert.deepEqual(JSON.parse(fs.readFileSync(r.configFile, 'utf-8')).mappings, [MUTE_1], 'nothing applied')
+  } finally { await r.close() }
+})
+
+test('a reload failure after the write is a 500 reporting applied: true and the new revision', async () => {
+  const r = await rig([MUTE_1], async () => { throw new Error('bridge exploded') })
+  try {
+    await post(r, '/api/mappings/shows', { name: 'Gala', mappings: [MUTE_7] })
+    const res = await post(r, '/api/mappings/shows/gala/recall')
+    assert.equal(res.status, 500)
+    const body = await res.json()
+    assert.equal(body.applied, true)
+    assert.match(body.error, /bridge exploded/)
+    assert.deepEqual(JSON.parse(fs.readFileSync(r.configFile, 'utf-8')).mappings, [MUTE_7])
+    assert.equal(body.revision, getMappingsRevision(r.configFile))
+  } finally { await r.close() }
+})
+
+test('the revision is a content hash: it changes with a same-size rewrite', async () => {
+  const r = await rig()
+  try {
+    const before = (await (await get(r, '/api/mappings')).json()).revision
+    assert.match(before, /^[0-9a-f]{40}$/)
+    assert.equal(before, getMappingsRevision(r.configFile))
+    const raw = fs.readFileSync(r.configFile, 'utf-8')
+    fs.writeFileSync(r.configFile, raw.replace('Mute 1', 'Mute X'))
+    assert.notEqual((await (await get(r, '/api/mappings')).json()).revision, before)
   } finally { await r.close() }
 })

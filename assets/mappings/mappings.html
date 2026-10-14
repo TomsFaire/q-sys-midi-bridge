@@ -208,6 +208,9 @@ async function refreshShows() {
 document.getElementById('show-recall-btn').addEventListener('click', async () => {
   const id = showSelect.value
   if (!id) return
+  // The shared editor exposes no dirty flag, so confirm on every recall.
+  // Recall replaces the table wholesale, so cancelling must send nothing.
+  if (!confirm('Recalling a show replaces the current mapping table. Any unsaved edits will be lost. Continue?')) return
   try {
     status('info', 'Recalling…')
     const r = await api('/api/mappings/shows/' + encodeURIComponent(id) + '/recall', { method: 'POST' })

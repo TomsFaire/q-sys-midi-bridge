@@ -9,6 +9,7 @@ import { EventEmitter } from 'node:events'
 import { QrcClient } from './qrc-client.js'
 import { MidiIO } from './midi-io.js'
 import { MappingEngine } from './mapping-engine.js'
+import { CoalescingRunner } from './coalescing-runner.js'
 import { loadConfig } from './config.js'
 import type { Config } from './config.js'
 
@@ -17,6 +18,13 @@ export class Bridge extends EventEmitter {
   private midi: MidiIO
   private engine: MappingEngine
   private config: Config
+  /**
+   * Every setupChangeGroup goes through here. Un-awaited calls from quick
+   * successive reloads/recalls would otherwise interleave Destroy/Add/
+   * AutoPoll/Poll and leave the group watching stale components. Looks up
+   * this.engine at run time, so a rebuilt engine is honoured.
+   */
+  private changeGroup = new CoalescingRunner(() => this.engine.setupChangeGroup())
 
   constructor(config: Config) {
     super()
@@ -97,13 +105,18 @@ export class Bridge extends EventEmitter {
       // (Designer compiling, CPU pegged) that is minutes, and awaiting it would
       // leave a show recall looking hung long after it had actually taken
       // effect. Lamp feedback catches up when it catches up.
-      this.engine.setupChangeGroup()
-        .then(() => console.log('[Bridge] Lamp feedback rebuilt'))
-        .catch((err) => console.error(`[Bridge] setupChangeGroup after reload: ${err.message}`))
+      this.requestChangeGroup('setupChangeGroup after reload', 'Lamp feedback rebuilt')
     }
 
     this.emit('status-change')
     console.log('[Bridge] Config hot-reloaded')
+  }
+
+  private requestChangeGroup(errorLabel: string, okMessage?: string): void {
+    let failed = false
+    this.changeGroup
+      .request((err) => { failed = true; console.error(`[Bridge] ${errorLabel}: ${err.message}`) })
+      .then(() => { if (okMessage && !failed) console.log(`[Bridge] ${okMessage}`) })
   }
 
   /**
@@ -113,9 +126,7 @@ export class Bridge extends EventEmitter {
   private wireQrcEvents(connectMessage: string): void {
     this.qrc.on('connect', () => {
       console.log(`[QRC] ${connectMessage}`)
-      this.engine.setupChangeGroup().catch((err) => {
-        console.error(`[Bridge] setupChangeGroup error: ${err.message}`)
-      })
+      this.requestChangeGroup('setupChangeGroup error')
       this.emit('status-change')
     })
     this.qrc.on('disconnect', (reason: string) => {

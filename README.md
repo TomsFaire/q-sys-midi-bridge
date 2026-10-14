@@ -406,6 +406,8 @@ A mapping on a fader or knob has no lamp and is skipped. On a ganged mapping (`l
 node scripts/check-leds.mjs    # what every lamp will show, and any dead mapping
 ```
 
+When `enabled: false`, toggle state is tracked locally only — the LED will drift if anything else changes the mute outside the MIDI controller.
+
 ---
 
 ## Shows (saved mapping sets)
@@ -459,8 +461,6 @@ can't. Move each one before it's live.
 array, so a tab left open across a recall would otherwise write its pre-recall
 snapshot back over the show. Saves carry a revision and a mismatch returns
 `409` — reload the page and redo the edit.
-
-When `enabled: false`, toggle state is tracked locally only — the LED will drift if anything else changes the mute outside the MIDI controller.
 
 ---
 

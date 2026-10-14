@@ -219,3 +219,12 @@ test('deleting a show that is not there is refused, not silent', () => {
     fs.rmSync(dir, { recursive: true, force: true })
   }
 })
+
+test('listShows ignores (and does not list) files whose stem is not a valid id', () => {
+  const dir = tmp()
+  try {
+    writeShow(dir, 'Good', [])
+    fs.copyFileSync(path.join(dir, 'good.json'), path.join(dir, 'Gala 2026.json'))
+    assert.deepEqual(listShows(dir).map((s) => s.id), ['good'])
+  } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+})

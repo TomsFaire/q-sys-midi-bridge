@@ -283,3 +283,16 @@ test('backups are pruned to the newest few, newest first', async () => {
     fs.rmSync(dir, { recursive: true, force: true })
   }
 })
+
+test('listAutoBackups skips a backup that cannot be read instead of throwing', () => {
+  const root = tmp()
+  try {
+    const autoDir = path.join(root, 'shows', '_auto')
+    writeShow(autoDir, 'one', [])
+    writeShow(autoDir, 'two', [])
+    // A directory named like a show lists as nothing but a readFileSync on it throws.
+    fs.mkdirSync(path.join(autoDir, 'three.json'))
+    const ids = listAutoBackups(autoDir).map((b) => b.id).sort()
+    assert.deepEqual(ids, ['one', 'two'])
+  } finally { fs.rmSync(root, { recursive: true, force: true }) }
+})
