@@ -32,6 +32,20 @@ const RELAY_LOGON_ID = '__bridge_logon'
 /** How long the relay holds browser traffic waiting for its Logon reply. */
 const LOGON_TIMEOUT_MS = 5_000
 
+// Sentinel id for the relay's keepalive NoOp, so its reply never reaches the
+// browser.
+const RELAY_KEEPALIVE_ID = '__bridge_keepalive'
+
+/**
+ * How often the relay pings the Core on a tab's behalf.
+ *
+ * A Core closes any QRC session that sends nothing for 120 s. The browser-side
+ * UCI only talks when a control moves, so an idle tab (an iPad on the wall)
+ * was dropped every two minutes and reconnected 2 s later — hundreds of Core
+ * logons a day. Well inside the limit, like QrcClient's own keepalive.
+ */
+const RELAY_KEEPALIVE_MS = 30_000
+
 /**
  * Clamp a WebSocket close reason to the 123 bytes the protocol allows. `ws`
  * throws a RangeError past that, which in the main process is an uncaught
@@ -43,15 +57,20 @@ function closeReason(text: string): string {
   return bytes.subarray(0, 120).toString('utf-8').replace(/\uFFFD+$/, '') + '...'
 }
 
-/** True if `msg` is the reply to the relay's own Logon request. */
-function isRelayLogonReply(msg: string): boolean {
+/** True if `msg` is the reply to the relay's own request carrying `id`. */
+function isRelayReplyTo(msg: string, id: string): boolean {
   // Cheap guard first — avoids JSON.parse on every relayed message.
-  if (!msg.includes(RELAY_LOGON_ID)) return false
+  if (!msg.includes(id)) return false
   try {
-    return (JSON.parse(msg) as { id?: unknown }).id === RELAY_LOGON_ID
+    return (JSON.parse(msg) as { id?: unknown }).id === id
   } catch {
     return false
   }
+}
+
+/** True if `msg` is the reply to the relay's own Logon request. */
+function isRelayLogonReply(msg: string): boolean {
+  return isRelayReplyTo(msg, RELAY_LOGON_ID)
 }
 
 /** Content types for the files assets/shared/ may serve — anything else is a 404. */
@@ -83,6 +102,8 @@ export class UciServer extends EventEmitter {
   private listening = false
   private _lastError: string | null = null
   private mappingsHandler: MappingsHttpHandler | null = null
+  // An instance field, not the bare constant, so a test can shorten it.
+  private keepAliveMs = RELAY_KEEPALIVE_MS
 
   /**
    * Start the UCI HTTP + WebSocket relay server.
@@ -194,8 +215,20 @@ export class UciServer extends EventEmitter {
         preLogonQueue.length = 0
       }
 
+      // Written straight to the socket, not through the Logon queue: a NoOp is
+      // harmless before Logon, and the first one is a full interval away.
+      let keepAliveTimer: ReturnType<typeof setInterval> | null = null
+      const stopKeepAlive = () => {
+        if (keepAliveTimer) { clearInterval(keepAliveTimer); keepAliveTimer = null }
+      }
+
       tcp.connect(corePort, coreHost, () => {
         console.log(`[UCI] TCP relay connected to ${coreHost}:${corePort}`)
+        keepAliveTimer = setInterval(() => {
+          sendToCore(JSON.stringify({
+            jsonrpc: '2.0', id: RELAY_KEEPALIVE_ID, method: 'NoOp', params: {},
+          }))
+        }, this.keepAliveMs)
         if (credentials?.username) {
           sendToCore(JSON.stringify({
             jsonrpc: '2.0',
@@ -240,16 +273,20 @@ export class UciServer extends EventEmitter {
             releaseQueue()
             continue
           }
+          // The browser never asked for this one, so it never sees the reply.
+          if (isRelayReplyTo(msg, RELAY_KEEPALIVE_ID)) continue
           if (ws.readyState === WebSocket.OPEN) ws.send(msg)
         }
       })
 
       tcp.on('error', (err) => {
         console.error('[UCI] TCP relay error:', err.message)
+        stopKeepAlive()
         if (ws.readyState === WebSocket.OPEN) ws.close(1011, closeReason(err.message))
       })
 
       tcp.on('close', () => {
+        stopKeepAlive()
         if (ws.readyState === WebSocket.OPEN) ws.close(1011, 'Core TCP closed')
       })
 
@@ -262,6 +299,7 @@ export class UciServer extends EventEmitter {
       })
 
       ws.on('close', () => {
+        stopKeepAlive()
         if (logonTimer) { clearTimeout(logonTimer); logonTimer = null }
         tcp.destroy()
         this.relays.delete(relay)
