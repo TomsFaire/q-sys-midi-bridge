@@ -31,7 +31,7 @@ To package a distributable DMG:
 
 ```bash
 npm run package
-# output: release/MIDI Q-Sys Bridge-0.2.5-arm64.dmg
+# output: release/MIDI Q-Sys Bridge-0.2.11-arm64.dmg
 ```
 
 ---
@@ -211,6 +211,61 @@ Triggered by Note On. Loads by name or by bank/slot.
 "qsys": { "type": "snapshot", "bank": 1, "slot": 3 }
 ```
 
+**Hand-written `snapshot` and `named_control` entries survive the editors.** The mapping editors can only show mappings that name a component — `component_control` and `toggle` — so these, and any mapping whose MIDI address isn't on your controller, have no row of their own. They are carried through a save untouched rather than dropped. You won't see them in the editor, but opening it and hitting Save will not delete them.
+
+**Comments will not survive, though.** Saving from either editor rewrites the whole `mappings` array through `JSON.stringify`, so every `//` comment in `config.json` is lost and the entries are reordered to match the controller's physical layout. Keep notes you care about outside the config file.
+
+### `link` — gang a stereo pair to one physical control
+
+One knob normally drives one Q-Sys control. That's right for a mono mic, but it's only ever half of a stereo source — trim the left leg of a Dante pair and the right stays where it was.
+
+Add `link` to gang a second target to the same knob, fader, or mute. Both legs receive the identical value, computed once, so they can't drift apart.
+
+Either field may be left out, and is then inherited from the primary. That covers both ways a stereo pair gets laid out in Designer:
+
+```jsonc
+// Two components, same control name — the common Dante case:
+"qsys": {
+  "type": "component_control",
+  "component": "Dante.In.9.Gain",
+  "control": "gain",
+  "min": -100,
+  "max": 20,
+  "link": { "component": "Dante.In.10.Gain" }   // control: "gain" inherited
+}
+
+// One component, two controls:
+"qsys": {
+  "type": "component_control",
+  "component": "Dante.Pair.Gain",
+  "control": "gain.1",
+  "min": -100,
+  "max": 20,
+  "link": { "control": "gain.2" }               // component inherited
+}
+```
+
+Give both fields to name an unrelated target explicitly. When the two legs share a component they go out as a single `Component.Set`; separate components are written concurrently, so a knob sweep isn't slowed by the extra leg.
+
+`link` also works on `toggle`, which is what you want for the matching stereo mute:
+
+```jsonc
+"qsys": {
+  "type": "toggle",
+  "component": "Dante.In.9.Gain",
+  "control": "mute",
+  "link": { "component": "Dante.In.10.Gain" }
+}
+```
+
+The linked leg follows the primary's tracked state rather than toggling independently, so a ganged pair can't desync into "left muted, right open".
+
+`link` is only valid on `component_control` and `toggle` — the other two have no component to inherit from, and a `link` on them is rejected rather than silently ignored.
+
+**In the UI:** tick the **Link** checkbox on any assigned row, in either the browser page at `/mappings` or the desktop **Configure Mappings** window (they share one editor), and a second row appears underneath for the right leg. Min/Max stay on the primary row and apply to both. Pointing a ganged row at a different component clears its link.
+
+**Known limitation:** the mute LED follows the *primary* leg only. If something outside the bridge mutes just the linked leg, the LED won't show it.
+
 ---
 
 ## Adapting to other controllers
@@ -232,10 +287,12 @@ It walks you through every control one by one and records the CC channel/number 
 Open `src/main/configurator.ts` and edit the `PHYSICAL_CONTROLS` array. Each entry describes one physical control and its MIDI address:
 
 ```typescript
-{ id: 'F1', label: 'Fader 1', group: 'Faders', controlType: 'fader',  midi: m('cc',      7, 22) },
-{ id: 'M1', label: 'Mute 1',  group: 'Mutes',  controlType: 'toggle', midi: m('cc',      1, 22) },
-{ id: 'BL', label: 'Bank L',  group: 'Buttons', controlType: 'toggle', midi: m('note_on', 1, 25) },
+{ id: 'F1', label: 'Fader 1', group: 'Faders',  controlType: 'fader',  midi: m('cc',      7, 22) },
+{ id: 'M1', label: 'Mute 1',  group: 'Mutes',   controlType: 'toggle', midi: m('cc',      1, 22), led: { channel: 1, note: 1  } },
+{ id: 'BL', label: 'Bank L',  group: 'Buttons', controlType: 'toggle', midi: m('note_on', 1, 25), led: { channel: 1, note: 25 } },
 ```
+
+`led` is the note that lights that button's lamp — a different address from what the button sends (see [Feedback](#feedback-bidirectional-mute-sync)). Faders and knobs have none.
 
 `controlType` controls what the configurator generates when you assign a Q-Sys target:
 - `fader` / `knob` → `component_control` (continuous, with min/max scaling)
@@ -285,6 +342,8 @@ The three knob rows give you 24 CCs. Only Row A is wired by default (pre-fader t
 | Solo buttons | Bus mute toggles | Bus Gain block, e.g. `MicRoom.Gain`, `mute` |
 | Solo buttons | Snapshot recall | `type: snapshot` per button |
 
+A knob assigned to a **stereo** source needs both legs, or you'll only be trimming one side of it. Add `link` to the mapping and the one knob drives the pair — see [`link` — gang a stereo pair to one physical control](#link--gang-a-stereo-pair-to-one-physical-control).
+
 The control names for sub-components (HPF, compressor, EQ) depend on how your Q-Sys design is structured. If they're inside a larger component rather than individual blocks, you may not be able to address them via `Component.Set` — in that case, expose them as Named Controls in Designer and use `type: named_control`.
 
 To find the right control name for any component:
@@ -299,17 +358,53 @@ When `feedback.enabled` is `true`, the bridge subscribes to mute control changes
 
 ```jsonc
 "feedback": {
-  "enabled": true,
-  "mute_leds": [
-    // Each entry maps a Q-Sys mute control to a MIDImix LED
-    { "component": "Mic.01.Gain", "control": "mute", "midi": {"channel": 1, "note": 1} },
-    { "component": "Mic.02.Gain", "control": "mute", "midi": {"channel": 1, "note": 4} }
-    // ... etc
-  ]
+  "enabled": true
 }
 ```
 
-The note numbers in `mute_leds` must match the note numbers in the corresponding `toggle` mappings for the LEDs to track correctly.
+**There is nothing to configure per LED.** A `toggle` mapping on a button that has a lamp lights that lamp and subscribes its own control. Reassign the button and its LED follows — including on a hot reload, mid-show.
+
+```jsonc
+// This one mapping is the whole story: it mutes Mic 6, lights Mute 7,
+// and subscribes Mic.06.Gain for pushes from the Core.
+{
+  "label": "Mic 6 Mute",
+  "midi": { "type": "cc", "channel": 1, "number": 28 },   // Mute 7 sends this
+  "qsys": { "type": "toggle", "component": "Mic.06.Gain", "control": "mute" }
+}
+```
+
+### Why the lamp isn't in the mapping
+
+A MIDImix button is **asymmetric**: it *sends* one address and *lights* on another.
+
+| Button | sends | lamp |
+|---|---|---|
+| Mute 1 | CC ch1 cc22 | Note 1 |
+| Mute 7 | CC ch1 cc28 | Note 19 |
+| Rec Arm 1 | CC ch3 cc22 | Note 3 |
+
+So the lamp cannot be read off a mapping's own MIDI address. It lives on the button instead, in `PHYSICAL_CONTROLS` (`src/main/physical-surface.ts`):
+
+```ts
+{ id: 'M7', label: 'Mute 7', controlType: 'toggle',
+  midi: m('cc', 1, 28),            // what it sends
+  led: { channel: 1, note: 19 } }  // what lights it
+```
+
+The engine joins the two: a toggle mapping's input address identifies the button, and the button supplies the lamp. The button assignment stays the single source of truth, while the note stays pinned to the hardware.
+
+A mapping on a fader or knob has no lamp and is skipped. On a ganged mapping (`link`), the **primary** target drives the LED, so a stereo pair never lights two buttons.
+
+> **Note on `midi.type`:** these CC addresses are what this rig's MIDImix actually sends — it runs a custom MIDI Mix Editor preset. `docs/bugfix-mute-midi-type.md` describes the *factory* layout, where buttons send Note On. Do not "correct" the table to match that doc without capturing `[MIDI RAW]` from the device first; it breaks every button.
+
+> **Removed in 0.2.13:** `feedback.mute_leds`. It was a second array keyed by Q-SYS control, maintained by hand, and neither mapping editor wrote to it — so reassigning a button moved what it *did* while its LED kept showing the old component. The key is now ignored; delete it or leave it, it does nothing either way.
+
+### Checking it
+
+```bash
+node scripts/check-leds.mjs    # what every lamp will show, and any dead mapping
+```
 
 When `enabled: false`, toggle state is tracked locally only — the LED will drift if anything else changes the mute outside the MIDI controller.
 
@@ -366,6 +461,14 @@ The page has the same capabilities as the desktop Configurator: assign
 Q-Sys components/controls to physical MIDImix controls, and **Save** or
 **Save & Apply** (applies live, no restart). Component/control lists are
 fetched live from Q-Sys, same as the desktop version.
+
+### One editor, two windows
+
+The browser page and the desktop Configurator both mount the same editor,
+`assets/shared/mapping-editor.js` (styled by `assets/shared/mapping-editor.css`).
+Adding a new `qsys.*` field means changing it in that one place, not two. The
+**Network** panel (host, UCI port, mappings password, restart) is not part of
+the shared editor and remains desktop-only.
 
 ---
 

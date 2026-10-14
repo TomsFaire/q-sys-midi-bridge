@@ -51,3 +51,45 @@ test('saveMappings then loadMappings round-trips through a real config file', ()
 
   fs.rmSync(dir, { recursive: true, force: true })
 })
+
+// ── qsys.link (stereo gang) ──────────────────────────────────────────────────
+
+test('validateMappings accepts a link naming only a component', () => {
+  const result = validateMappings([
+    { midi: { type: 'cc', channel: 4, number: 22 },
+      qsys: { type: 'component_control', component: 'Dante.In.9.Gain', control: 'gain', link: { component: 'Dante.In.10.Gain' } } },
+  ])
+  assert.equal(result.valid, true)
+})
+
+test('validateMappings accepts a link naming only a control', () => {
+  const result = validateMappings([
+    { midi: { type: 'cc', channel: 4, number: 22 },
+      qsys: { type: 'component_control', component: 'Dante.Pair.Gain', control: 'gain.1', link: { control: 'gain.2' } } },
+  ])
+  assert.equal(result.valid, true)
+})
+
+test('validateMappings rejects a link with neither component nor control', () => {
+  const result = validateMappings([
+    { midi: { type: 'cc', channel: 4, number: 22 },
+      qsys: { type: 'component_control', component: 'A.Gain', control: 'gain', link: {} } },
+  ])
+  assert.equal(result.valid, false)
+})
+
+test('validateMappings rejects a link on a snapshot mapping', () => {
+  const result = validateMappings([
+    { midi: { type: 'note_on', channel: 1, number: 25 },
+      qsys: { type: 'snapshot', bank: 1, slot: 1, link: { component: 'A.Gain' } } },
+  ])
+  assert.equal(result.valid, false)
+})
+
+test('validateMappings rejects a link on a named_control mapping', () => {
+  const result = validateMappings([
+    { midi: { type: 'cc', channel: 4, number: 22 },
+      qsys: { type: 'named_control', name: 'MasterGain', link: { control: 'other' } } },
+  ])
+  assert.equal(result.valid, false)
+})

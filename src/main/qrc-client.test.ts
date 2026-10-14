@@ -114,6 +114,10 @@ function fakeCore(
     seen,
     /** Start refusing calls on an already-open connection. */
     rejectEverything: () => { lockedDown = true },
+    /** Send an unsolicited frame, the way AutoPoll pushes arrive. */
+    push: (frame: Record<string, unknown>) => {
+      for (const socket of sockets) socket.write(`${JSON.stringify(frame)}\0`)
+    },
     /** Drop live connections without closing the listener. */
     drop: async () => {
       for (const socket of sockets) socket.destroy()
@@ -351,4 +355,64 @@ test('a rejected credential is not retried as a parameter-shape problem', async 
 
   await client.disconnect()
   await core.close()
+})
+
+test('an AutoPoll push carrying params reaches the notification listeners', async () => {
+  // A real Core pushes ChangeGroup.Poll as a JSON-RPC notification: a method
+  // and params, no id and no result. Dropping it leaves mute LEDs frozen at
+  // whatever the bridge last set itself.
+  const core = fakeCore()
+  const port = await core.listen()
+  const client = new QrcClient('127.0.0.1', port)
+  await client.connect()
+
+  const seen: Array<{ id: string; result: unknown }> = []
+  client.on('notification', (id: string, result: unknown) => seen.push({ id, result }))
+
+  try {
+    core.push({
+      jsonrpc: '2.0',
+      method: 'ChangeGroup.Poll',
+      params: {
+        Id: 'mutes',
+        Changes: [{ Component: 'Mic.01.Gain', Name: 'mute', Value: 1, String: 'muted' }],
+      },
+    })
+    await new Promise((r) => setTimeout(r, 50))
+
+    assert.equal(seen.length, 1)
+    assert.equal(seen[0].id, 'mutes')
+    assert.deepEqual(
+      (seen[0].result as { Changes: unknown[] }).Changes,
+      [{ Component: 'Mic.01.Gain', Name: 'mute', Value: 1, String: 'muted' }],
+    )
+  } finally {
+    await client.disconnect()
+    await core.close()
+  }
+})
+
+test('a push the Core volunteers unprompted is not mistaken for feedback', async () => {
+  // EngineStatus arrives the same way as AutoPoll. It carries no Changes, so
+  // forwarding it would only make the engine warn.
+  const core = fakeCore()
+  const port = await core.listen()
+  const client = new QrcClient('127.0.0.1', port)
+  await client.connect()
+
+  let count = 0
+  client.on('notification', () => { count += 1 })
+
+  try {
+    core.push({
+      jsonrpc: '2.0',
+      method: 'EngineStatus',
+      params: { State: 'Active', DesignName: 'FOH' },
+    })
+    await new Promise((r) => setTimeout(r, 50))
+    assert.equal(count, 0)
+  } finally {
+    await client.disconnect()
+    await core.close()
+  }
 })
