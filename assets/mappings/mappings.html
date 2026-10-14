@@ -182,11 +182,13 @@ async function initFollowRouter() {
   toggle.checked = state.enabled
   toggle.disabled = !state.available
   btn.disabled = !state.available || !state.enabled
+  editor.setFollowLocked(state.enabled)
 
   toggle.addEventListener('change', async () => {
     try {
       await api('/api/mappings/follow-router', { method: 'POST', body: JSON.stringify({ enabled: toggle.checked }) })
       btn.disabled = !toggle.checked
+      editor.setFollowLocked(toggle.checked)
       status.className = 'ok'
       status.textContent = toggle.checked ? 'Follow router on' : 'Follow router off'
     } catch (e) {

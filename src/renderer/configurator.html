@@ -296,6 +296,8 @@ async function init() {
     adapter,
     onStatus,
   })
+  // The follow state may have arrived before the editor existed.
+  editor.setFollowLocked(followEnabled)
   hideOverlay()
   document.getElementById('save-btn').disabled = false
   document.getElementById('save-restart-btn').disabled = false
@@ -307,6 +309,8 @@ document.getElementById('save-restart-btn').addEventListener('click', () => { if
 
 // ── Follow input router (Knob A) ──────────────────────────────────────────────
 
+let followEnabled = false
+
 async function initFollowRouter() {
   const toggle = document.getElementById('follow-router-toggle')
   const btn = document.getElementById('auto-map-btn')
@@ -315,11 +319,15 @@ async function initFollowRouter() {
   toggle.checked = state.enabled
   toggle.disabled = !state.available
   btn.disabled = !state.available || !state.enabled
+  followEnabled = state.enabled
+  if (editor) editor.setFollowLocked(followEnabled)
 
   toggle.addEventListener('change', async () => {
     try {
       await ipcRenderer.invoke('cfg:set-follow-router', toggle.checked)
       btn.disabled = !toggle.checked
+      followEnabled = toggle.checked
+      if (editor) editor.setFollowLocked(followEnabled)
       status.className = 'ok'
       status.textContent = toggle.checked ? 'Follow router on' : 'Follow router off'
     } catch (e) {
