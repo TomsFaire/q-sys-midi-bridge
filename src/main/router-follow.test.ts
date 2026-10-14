@@ -106,3 +106,22 @@ test('autoMapKnobA does not mutate its input', () => {
   autoMapKnobA(mappings, new Map([[1, 3]]), cfg)
   assert.equal(mappings[0].qsys.control, 'channel.1.input.gain')
 })
+
+const link = { type: 'component_control', component: 'Analog.Inputs', control: 'channel.2.preamp.gain', min: -100, max: 20 } as const
+
+test('autoMapKnobA leaves a stereo-linked strip untouched and reports why', () => {
+  const linked: Mapping = { ...knobA(1, 'manual.control'), qsys: { ...knobA(1).qsys, control: 'manual.control', link } }
+  const res = autoMapKnobA([linked, knobA(2, 'manual.control')], new Map([[1, 3], [2, 4]]), cfg)
+  assert.deepEqual(res.changed, [2])
+  assert.deepEqual(res.skipped.filter((x) => x.strip <= 2), [{ strip: 1, reason: 'has stereo link, not auto-mapped' }])
+  assert.deepEqual(res.mappings[0], linked)
+  assert.equal(res.mappings[1].qsys.control, 'channel.4.preamp.gain')
+})
+
+test('autoMapKnobA still honours `only` when a linked strip exists', () => {
+  const linked: Mapping = { ...knobA(1), qsys: { ...knobA(1).qsys, link } }
+  const res = autoMapKnobA([linked, knobA(2, 'manual.control')], new Map([[1, 3], [2, 4]]), cfg, [2])
+  assert.deepEqual(res.changed, [2])
+  assert.deepEqual(res.skipped, [])
+  assert.deepEqual(res.mappings[0], linked)
+})

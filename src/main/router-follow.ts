@@ -9,6 +9,7 @@
  */
 
 import type { Mapping, QsysRef } from './config.js'
+import { PHYSICAL_CONTROLS } from './physical-surface.js'
 
 export type SourceKind = 'analog' | 'flex' | 'dante'
 
@@ -30,9 +31,12 @@ export const STRIPS = 8
 export const INPUTS_PER_GROUP = 8
 export const ROUTER_INPUTS = 24
 
-// Knob A 1-8 are CC ch4 #22-29 (see PHYSICAL_CONTROLS in mapping-service.ts).
-export const KNOB_A_CHANNEL = 4
-export const KNOB_A_FIRST_CC = 22
+// Knob A strip N -> its MIDI address, read off PHYSICAL_CONTROLS ("Knob A N").
+const KNOB_A_MIDI = new Map<number, { channel: number; number: number }>()
+for (const c of PHYSICAL_CONTROLS) {
+  const m = /^Knob A (\d+)$/.exec(c.label)
+  if (m && c.midi.type === 'cc') KNOB_A_MIDI.set(Number(m[1]), { channel: c.midi.channel, number: c.midi.number })
+}
 
 // Component names are the Q-SYS script names, not the block labels shown in
 // Designer (the Dante block is labelled "Software-Dante-RX-1" but scripts as
@@ -113,7 +117,7 @@ export interface AutoMapResult {
   mappings: Mapping[]
   /** Strips whose mapping was rewritten. */
   changed: number[]
-  /** Strips that could not be mapped, with the reason. */
+  /** Strips that could not be mapped (or were left alone, e.g. stereo-linked), with the reason. */
   skipped: Array<{ strip: number; reason: string }>
 }
 
@@ -125,6 +129,7 @@ function sameTarget(a: QsysRef, b: QsysRef): boolean {
 /**
  * Point Knob A N at the gain control of the source routed to output N.
  * `only` limits the rewrite to those strips; other knobs are left untouched.
+ * A strip whose existing mapping has a stereo `qsys.link` is skipped, not rewritten.
  */
 export function autoMapKnobA(
   mappings: Mapping[],
@@ -138,6 +143,13 @@ export function autoMapKnobA(
 
   for (let strip = 1; strip <= STRIPS; strip++) {
     if (only && !only.includes(strip)) continue
+    const addr = KNOB_A_MIDI.get(strip)
+    if (!addr) continue
+    const idx = out.findIndex((m) => m.midi.type === 'cc' && m.midi.channel === addr.channel && m.midi.number === addr.number)
+    if (idx !== -1 && out[idx].qsys.link) {
+      skipped.push({ strip, reason: 'has stereo link, not auto-mapped' })
+      continue
+    }
     const input = routes.get(strip)
     if (input === undefined) {
       skipped.push({ strip, reason: 'no route found' })
@@ -149,10 +161,8 @@ export function autoMapKnobA(
       skipped.push({ strip, reason: src ? `${src.kind} component not configured` : `unknown input ${input}` })
       continue
     }
-    const cc = KNOB_A_FIRST_CC + strip - 1
-    const idx = out.findIndex((m) => m.midi.type === 'cc' && m.midi.channel === KNOB_A_CHANNEL && m.midi.number === cc)
     if (idx === -1) {
-      out.push({ label: `Knob A ${strip}`, midi: { type: 'cc', channel: KNOB_A_CHANNEL, number: cc }, qsys: ref })
+      out.push({ label: `Knob A ${strip}`, midi: { type: 'cc', channel: addr.channel, number: addr.number }, qsys: ref })
       changed.push(strip)
     } else if (!sameTarget(out[idx].qsys, ref)) {
       out[idx] = { ...out[idx], qsys: ref }
