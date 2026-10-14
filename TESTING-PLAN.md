@@ -416,7 +416,9 @@ rejected without touching `config.json`.
 
 **Mute LED doesn't light**
 - Feedback requires `feedback.enabled: true` in config (it is — confirm it wasn't accidentally edited)
-- The note number in `feedback.mute_leds` must match the note number in the `toggle` mapping for the same channel
+- Run `node scripts/check-leds.mjs` — it prints what every lamp will show and flags any mapping sitting on an address no button sends.
+- The mapping must be `qsys.type: "toggle"` and its MIDI address must match a button in `PHYSICAL_CONTROLS`. The lamp comes from that button's `led`, not from the mapping (a MIDImix button sends a CC but lights on a different note).
+- Check the tray activity log for `ChangeGroup feedback active` and the LED count logged on reload
 
 **App won't start / native module error**
 ```bash

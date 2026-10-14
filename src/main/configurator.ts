@@ -19,8 +19,9 @@ import {
   PHYSICAL_CONTROLS,
   discoverComponents,
   getComponentControls,
-  saveMappings,
-  saveAndApplyMappings,
+  getMappingsRevision,
+  saveMappingsIfFresh,
+  saveAndApplyMappingsIfFresh,
 } from './mapping-service.js'
 import type { FollowRouterControl } from './router-follow.js'
 
@@ -152,17 +153,24 @@ export class Configurator {
 
     // ── Load current config ─────────────────────────────────────────────────
     ipcMain.handle('cfg:load-config', () => {
+      // Revision first: if a recall slips in before the read, the revision is
+      // the older one and the next save is refused rather than trusted.
+      const revision = getMappingsRevision(this.configFilePath)
       const raw = fs.readFileSync(this.configFilePath, 'utf-8')
-      return this.parseConfig(raw)
+      return { ...this.parseConfig(raw), revision }
     })
 
     // ── Save new mappings (preserves everything else in config) ─────────────
-    ipcMain.handle('cfg:save-config', (_event, mappings: Mapping[]) =>
-      saveMappings(this.configFilePath, mappings))
+    // Both saves carry the revision the window loaded with; a stale one is
+    // refused so a window left open across a show recall cannot revert it.
+    ipcMain.handle('cfg:save-config', (_event, mappings: Mapping[], revision: unknown) => ({
+      revision: saveMappingsIfFresh(this.configFilePath, mappings, revision),
+    }))
 
     // ── Save + hot-reload (no restart needed) ───────────────────────────────
-    ipcMain.handle('cfg:save-and-apply', (_event, mappings: Mapping[]) =>
-      saveAndApplyMappings(this.configFilePath, mappings, this.onReload))
+    ipcMain.handle('cfg:save-and-apply', async (_event, mappings: Mapping[], revision: unknown) => ({
+      revision: await saveAndApplyMappingsIfFresh(this.configFilePath, mappings, revision, this.onReload),
+    }))
 
     // ── Follow input router (Knob A) ────────────────────────────────────────
     ipcMain.handle('cfg:get-follow-router', () => ({

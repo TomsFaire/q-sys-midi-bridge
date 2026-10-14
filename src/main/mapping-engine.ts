@@ -8,10 +8,94 @@
 
 import { QrcClient } from './qrc-client.js'
 import { MidiIO } from './midi-io.js'
-import type { Config, Mapping } from './config.js'
+import type { Config, Mapping, QsysRef } from './config.js'
+import { PHYSICAL_CONTROLS } from './physical-surface.js'
 import { parseCrosspoint, resolveFollowConfig, routesFromControls, watchedCrosspoints, STRIPS } from './router-follow.js'
 
+/** One resolved Q-SYS write target. */
+interface Target { component: string; control: string }
+
 const CHANGE_GROUP_ID = 'mutes'
+
+const keyOf = (t: Target): string => `${t.component}:${t.control}`
+
+/**
+ * The primary target, plus the ganged leg when `qsys.link` is set. A link
+ * field left out is inherited from the primary, so `{ component }` alone
+ * means "other component, same control" and `{ control }` alone means
+ * "same component, other control".
+ */
+function resolveTargets(q: QsysRef): Target[] {
+  const primary: Target = { component: q.component ?? '', control: q.control ?? '' }
+  if (!q.link) return [primary]
+  return [
+    primary,
+    {
+      component: q.link.component ?? primary.component,
+      control: q.link.control ?? primary.control,
+    },
+  ]
+}
+
+/** A lamp derived from a mapping: which control to watch, which note to light. */
+interface DerivedLed {
+  key: string
+  component: string
+  control: string
+  midi: { channel: number; note: number }
+}
+
+/** Button labels by MIDI input address, for naming one in the activity log. */
+const BUTTON_BY_ADDRESS = new Map(
+  PHYSICAL_CONTROLS.filter((pc) => pc.controlType === 'toggle').map((pc) => [
+    `${pc.midi.type}:${pc.midi.channel}:${pc.midi.number}`,
+    pc.label,
+  ]),
+)
+
+/** Every physical control that owns a lamp, by its MIDI input address. */
+const LAMP_BY_ADDRESS = new Map(
+  PHYSICAL_CONTROLS.filter((pc) => pc.led).map((pc) => [
+    `${pc.midi.type}:${pc.midi.channel}:${pc.midi.number}`,
+    pc.led!,
+  ]),
+)
+
+/**
+ * The LED map, derived from the mappings themselves.
+ *
+ * A mapping says which button is involved (its MIDI address) and which Q-SYS
+ * control it drives. The lamp comes from the button: on this surface a button
+ * SENDS a CC but LIGHTS on a Note On at a different number, so the note cannot
+ * be read off the mapping — it is a fixed property of the hardware, held in
+ * PHYSICAL_CONTROLS. Joining the two makes the button assignment the single
+ * source of truth, so reassigning a button during a show moves its lamp and
+ * its Core subscription with it.
+ *
+ * Skipped: non-toggle targets (a gain has no on/off to show) and any address
+ * with no lamp behind it (faders, knobs). The ganged leg follows the primary
+ * rather than lighting a lamp of its own, matching how `execute` drives a
+ * linked pair.
+ */
+function deriveLeds(config: Config): DerivedLed[] {
+  const leds: DerivedLed[] = []
+  for (const mapping of config.mappings) {
+    if (mapping.qsys.type !== 'toggle') continue
+    const lamp = LAMP_BY_ADDRESS.get(
+      `${mapping.midi.type}:${mapping.midi.channel}:${mapping.midi.number}`,
+    )
+    if (!lamp) continue
+    const primary = resolveTargets(mapping.qsys)[0]
+    if (!primary.component || !primary.control) continue
+    leds.push({
+      key: keyOf(primary),
+      component: primary.component,
+      control: primary.control,
+      midi: { channel: lamp.channel, note: lamp.note },
+    })
+  }
+  return leds
+}
 
 export class MappingEngine {
   private qrc: QrcClient
@@ -47,8 +131,8 @@ export class MappingEngine {
       }
     }
 
-    for (const led of config.feedback.mute_leds) {
-      this.ledMap.set(`${led.component}:${led.control}`, led.midi)
+    for (const led of deriveLeds(config)) {
+      this.ledMap.set(led.key, led.midi)
     }
 
     this.qrc.on('notification', (_id: string, result: unknown) => this.handleNotification(result))
@@ -56,7 +140,13 @@ export class MappingEngine {
 
   handleCC(channel: number, cc: number, value: number): void {
     const mapping = this.ccMap.get(`${channel}:${cc}`)
-    if (!mapping) return
+    if (!mapping) {
+      // Only for a button. An unmapped fader or knob streams CC continuously
+      // and would bury the log under a single sweep.
+      const button = BUTTON_BY_ADDRESS.get(`cc:${channel}:${cc}`)
+      if (button && value > 0) this.log(`${button} — no mapping for this button`)
+      return
+    }
     // Toggle buttons (mutes, rec arm) send CC 127 on press and CC 0 on release.
     // Ignore the 0 so we don't double-fire and immediately undo the toggle.
     if (mapping.qsys.type === 'toggle' && value === 0) return
@@ -67,7 +157,10 @@ export class MappingEngine {
 
   handleNoteOn(channel: number, note: number): void {
     const mapping = this.noteMap.get(`${channel}:${note}`)
-    if (!mapping) return
+    if (!mapping) {
+      this.log(`note ${channel}:${note} — no mapping for this button`)
+      return
+    }
     this.execute(mapping, 127).catch((err) => {
       console.error(`[Bridge] QRC error for "${mapping.label ?? 'unknown'}": ${err.message}`)
     })
@@ -87,7 +180,12 @@ export class MappingEngine {
 
   /** Hot-reload mappings from a new config without restarting the app. */
   reload(config: Config): void {
-    this.config = config
+    // A lamp lit under the outgoing assignment has to be darkened here. The
+    // Core only pushes changes to controls we are still watching, so once a
+    // button moves off a component nothing will ever arrive to clear the lamp
+    // it left behind — it would sit lit for the rest of the show.
+    const lit = [...this.ledMap].filter(([key]) => this.toggleState.get(key) === 1)
+
     this.ccMap.clear()
     this.noteMap.clear()
     this.toggleState.clear()
@@ -98,10 +196,19 @@ export class MappingEngine {
       if (mapping.midi.type === 'cc') this.ccMap.set(key, mapping)
       else this.noteMap.set(key, mapping)
     }
-    for (const led of config.feedback.mute_leds) {
-      this.ledMap.set(`${led.component}:${led.control}`, led.midi)
+    for (const led of deriveLeds(config)) {
+      this.ledMap.set(led.key, led.midi)
     }
-    console.log(`[Bridge] Mappings reloaded — ${this.ccMap.size} CC, ${this.noteMap.size} note`)
+
+    // Only lamps whose binding actually moved. One that still shows the same
+    // control is left alone rather than blinked off and repainted by the poll.
+    for (const [key, old] of lit) {
+      if (this.ledMap.get(key)?.note === old.note) continue
+      this.midi.sendNoteOff(old.channel, old.note)
+    }
+
+    this.config = config
+    console.log(`[Bridge] Mappings reloaded — ${this.ccMap.size} CC, ${this.noteMap.size} note, ${this.ledMap.size} LED`)
   }
 
   getRecentActivity(): string[] {
@@ -114,20 +221,31 @@ export class MappingEngine {
 
   async setupChangeGroup(): Promise<void> {
     const follow = this.followRouter
-    const ledsOn = this.config.feedback.enabled && this.ledMap.size > 0
-    if (!ledsOn && !follow.enabled) return
+    if (!this.config.feedback.enabled && !follow.enabled) return
+
+    // AddComponentControl accumulates on a group id, so re-subscribing after a
+    // reload would leave the component a button was reassigned away from
+    // watched forever. Destroy first — the group is rebuilt from scratch below.
+    // On the first connect there is no group yet and the Core may reject this;
+    // that is the expected case, not a fault, so it stays out of the error log.
+    await this.qrc.call('ChangeGroup.Destroy', { Id: CHANGE_GROUP_ID })
+      .catch((err) => console.log(`[Bridge] No existing ChangeGroup to destroy (${err.message})`))
+
+    const leds = this.config.feedback.enabled ? deriveLeds(this.config) : []
+    if (leds.length === 0 && !follow.enabled) return
 
     // Group controls by component for the ChangeGroup subscription. Everything
     // goes into the one existing group: the Core has a small change-group budget.
     const byComponent = new Map<string, string[]>()
-    if (ledsOn) {
-      for (const led of this.config.feedback.mute_leds) {
-        if (!byComponent.has(led.component)) byComponent.set(led.component, [])
-        byComponent.get(led.component)!.push(led.control)
-      }
+    for (const led of leds) {
+      if (!byComponent.has(led.component)) byComponent.set(led.component, [])
+      const controls = byComponent.get(led.component)!
+      if (!controls.includes(led.control)) controls.push(led.control)
     }
     if (follow.enabled) {
-      byComponent.set(follow.router, [...(byComponent.get(follow.router) ?? []), ...watchedCrosspoints()])
+      const controls = byComponent.get(follow.router) ?? []
+      for (const c of watchedCrosspoints()) if (!controls.includes(c)) controls.push(c)
+      byComponent.set(follow.router, controls)
       this.routesBaselined = false
     }
 
@@ -186,13 +304,15 @@ export class MappingEngine {
   }
 
   private handleNotification(result: unknown): void {
-    console.log('[Bridge] handleNotification raw:', JSON.stringify(result).slice(0, 200))
     if (!result || typeof result !== 'object') return
     const r = result as { Changes?: Array<{ Component: string; Name: string; Value: number }> }
     if (!Array.isArray(r.Changes)) {
       console.warn('[Bridge] handleNotification: no Changes array in result')
       return
     }
+    // An empty push is the AutoPoll clock ticking, not news.
+    if (r.Changes.length === 0) return
+    console.log('[Bridge] handleNotification:', JSON.stringify(r.Changes).slice(0, 200))
 
     for (const change of r.Changes) {
       this.trackRoute(change)
@@ -224,40 +344,45 @@ export class MappingEngine {
   }
 
   private async execute(mapping: Mapping, midiValue: number): Promise<void> {
-    if (!this.qrc.isConnected) return
-
     const q = mapping.qsys
     const label = mapping.label ?? `${mapping.midi.type}:${mapping.midi.number}`
 
+    // Returning silently here made a dropped Core connection indistinguishable
+    // from a broken mapping — raw MIDI in the log, nothing else, no error.
+    if (!this.qrc.isConnected) {
+      this.log(`${label} — Q-SYS not connected, press ignored`)
+      return
+    }
+
     switch (q.type) {
       case 'component_control': {
+        // Scale once, then write that same value to every leg — a stereo pair
+        // must never drift apart by re-scaling per leg.
         const scaled = this.scale(midiValue, q.min ?? 0, q.max ?? 1)
-        await this.qrc.call('Component.Set', {
-          Name: q.component,
-          Controls: [{ Name: q.control, Value: scaled }],
-        })
-        this.log(`${label} → ${scaled.toFixed(1)}`)
+        const targets = resolveTargets(q)
+        await this.setTargets(targets, scaled)
+        this.log(`${label} → ${scaled.toFixed(1)}${targets.length > 1 ? ' (ganged)' : ''}`)
         break
       }
 
       case 'toggle': {
-        const key = `${q.component}:${q.control}`
-        const current = this.toggleState.get(key) ?? 0
+        const targets = resolveTargets(q)
+        // The linked leg follows the primary's cached state rather than
+        // toggling on its own, so a ganged pair can't desync into
+        // "left muted, right open".
+        const current = this.toggleState.get(keyOf(targets[0])) ?? 0
         const next = current === 0 ? 1 : 0
-        this.toggleState.set(key, next)
-        await this.qrc.call('Component.Set', {
-          Name: q.component,
-          Controls: [{ Name: q.control, Value: next }],
-        })
-        // Update LED immediately — Q-SYS won't push a notification for
+        for (const t of targets) this.toggleState.set(keyOf(t), next)
+        await this.setTargets(targets, next)
+        // Update LEDs immediately — Q-SYS won't push a notification for
         // changes we initiated ourselves on the same connection.
-        console.log(`[Bridge DEBUG] toggle key="${key}" ledMapSize=${this.ledMap.size} led=${JSON.stringify(this.ledMap.get(key))}`)
-        const led = this.ledMap.get(key)
-        if (led) {
+        for (const t of targets) {
+          const led = this.ledMap.get(keyOf(t))
+          if (!led) continue
           if (next === 1) this.midi.sendNoteOn(led.channel, led.note)
           else this.midi.sendNoteOff(led.channel, led.note)
         }
-        this.log(`${label} → ${next === 1 ? 'MUTED' : 'unmuted'}`)
+        this.log(`${label} → ${next === 1 ? 'MUTED' : 'unmuted'}${targets.length > 1 ? ' (ganged)' : ''}`)
         break
       }
 
@@ -281,6 +406,28 @@ export class MappingEngine {
         break
       }
     }
+  }
+
+  /**
+   * Writes `value` to every target, batching those that share a component
+   * into one Component.Set. Separate components go out together rather than
+   * in series, so a knob sweep isn't throttled by the extra leg.
+   */
+  private async setTargets(targets: Target[], value: number): Promise<void> {
+    const byComponent = new Map<string, string[]>()
+    for (const t of targets) {
+      const controls = byComponent.get(t.component) ?? []
+      if (!controls.includes(t.control)) controls.push(t.control)
+      byComponent.set(t.component, controls)
+    }
+    await Promise.all(
+      [...byComponent].map(([Name, controls]) =>
+        this.qrc.call('Component.Set', {
+          Name,
+          Controls: controls.map((name) => ({ Name: name, Value: value })),
+        }),
+      ),
+    )
   }
 
   private scale(value: number, min: number, max: number): number {

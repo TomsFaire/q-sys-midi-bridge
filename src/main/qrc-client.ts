@@ -34,7 +34,11 @@ interface JsonRpcRequest {
 
 interface JsonRpcResponse {
   jsonrpc: '2.0'
-  id: number | string | null
+  // Absent on a push: AutoPoll and EngineStatus arrive as JSON-RPC
+  // notifications, which carry a method and params instead of an id/result.
+  id?: number | string | null
+  method?: string
+  params?: unknown
   result?: unknown
   error?: { code: number; message: string }
 }
@@ -368,10 +372,28 @@ export class QrcClient extends EventEmitter {
   private handleMessage(msg: JsonRpcResponse): void {
     // No id = pure JSON-RPC notification (Q-SYS AutoPoll push)
     if (msg.id === undefined || msg.id === null) {
+      // A real Core pushes AutoPoll results as a method + params, with no
+      // result member: {"method":"ChangeGroup.Poll","params":{Id, Changes}}.
+      // params is the payload the listeners want; shape it like a poll reply.
+      if (msg.method === 'ChangeGroup.Poll' && msg.params !== undefined) {
+        const params = msg.params as { Id?: unknown; Changes?: unknown }
+        const id = typeof params.Id === 'string' ? params.Id : ''
+        // AutoPoll fires on its own clock, so only a push with something in
+        // it is worth a line — otherwise this logs 20x a second forever.
+        if (Array.isArray(params.Changes) && params.Changes.length > 0) {
+          console.log(`[QRC] AutoPoll push (id="${id}"):`, JSON.stringify(params).slice(0, 120))
+        }
+        this.emit('notification', id, params)
+        return
+      }
       if (msg.result !== undefined) {
         console.log('[QRC] Notification (no id):', JSON.stringify(msg.result).slice(0, 120))
         this.emit('notification', '', msg.result)
+        return
       }
+      // Anything else the Core volunteers (EngineStatus on connect, for one)
+      // is not control feedback — log it and move on.
+      if (msg.method) console.log(`[QRC] Push ignored: ${msg.method}`)
       return
     }
     const id = typeof msg.id === 'string' ? parseInt(msg.id, 10) : msg.id

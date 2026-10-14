@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <title>MIDI Mappings</title>
+<link rel="stylesheet" href="/shared/mapping-editor.css">
 <style>
   :root {
     --bg: #f5f5f7; --surface: #ffffff; --border: #d1d1d6; --text: #1c1c1e;
@@ -32,33 +33,7 @@
   .login-card p.hint { font-size: 12px; color: var(--text-dim); }
   .login-card p.err { font-size: 12px; color: var(--red); min-height: 14px; }
 
-  .tabs { display: flex; gap: 2px; padding: 0 16px; background: var(--surface); border-bottom: 1px solid var(--border); overflow-x: auto; }
-  .tab { padding: 8px 12px; background: none; color: var(--text-dim); border-bottom: 2px solid transparent; margin-bottom: -1px; font-size: 12px; font-weight: 500; white-space: nowrap; }
-  .tab:hover { color: var(--text); }
-  .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
-
-  .filterbar { display: flex; align-items: center; gap: 8px; padding: 8px 16px; background: var(--bg); border-bottom: 1px solid var(--border); }
-  .filterbar input[type=search] { padding: 5px 9px; border: 1px solid var(--border); border-radius: 5px; width: 180px; font-size: 12px; background: var(--surface); }
-  #count-label { font-size: 11px; color: var(--text-dim); margin-left: auto; }
-
-  .table-wrap { flex: 1; overflow-x: auto; }
-  table { width: 100%; min-width: 780px; border-collapse: collapse; }
-  thead tr { background: var(--surface); }
-  th { padding: 7px 10px; text-align: left; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.4px; color: var(--text-dim); border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--surface); }
-  td { padding: 5px 6px; border-bottom: 1px solid var(--border); vertical-align: middle; }
-  tr.group-row { background: var(--group-bg); }
-  tr.group-row td { padding: 4px 10px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.6px; color: var(--text-dim); }
-  tr.ctrl-row.assigned { background: #f0fff4; }
-  .badge { display: inline-block; padding: 2px 7px; border-radius: 4px; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px; }
-  .badge-fader { background: #d1f0d1; color: #1a6b1a; }
-  .badge-knob  { background: #d4e5ff; color: #003fa8; }
-  .badge-toggle{ background: #ffe5d4; color: #a83000; }
-  select, input[type=text], input[type=number] { width: 100%; padding: 4px 6px; border: 1px solid var(--border); border-radius: 4px; background: var(--surface); font-size: 12px; color: var(--text); font-family: inherit; }
-  select:disabled, input:disabled { background: var(--bg); color: var(--text-dim); }
-  .td-label { font-size: 12px; font-weight: 500; padding-left: 10px; white-space: nowrap; }
-  .td-clear { text-align: center; }
-  .clear-btn { background: none; color: var(--text-dim); font-size: 13px; padding: 2px 5px; border-radius: 3px; }
-  .clear-btn:hover { background: #ffe5e5; color: var(--red); }
+  #editor-root { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 
   footer { display: flex; align-items: center; gap: 10px; padding: 10px 16px; background: var(--surface); border-top: 1px solid var(--border); }
   #save-status { font-size: 12px; color: var(--text-dim); }
@@ -93,58 +68,42 @@
   <span id="auto-map-status"></span>
   </header>
 
-  <div class="tabs" id="tabs">
-    <button class="tab active" data-group="all">All</button>
-    <button class="tab" data-group="Faders">Faders</button>
-    <button class="tab" data-group="Knobs A">Knobs A</button>
-    <button class="tab" data-group="Knobs B">Knobs B</button>
-    <button class="tab" data-group="Knobs C">Knobs C</button>
-    <button class="tab" data-group="Mutes">Mutes</button>
-    <button class="tab" data-group="Rec Arms">Rec Arms</button>
-    <button class="tab" data-group="Buttons">Buttons</button>
-  </div>
-
-  <div class="filterbar">
-    <input type="search" id="filter-input" placeholder="Filter e.g. Fader 1, Mute…">
-    <span id="count-label"></span>
-  </div>
-
-  <div class="table-wrap">
-    <table>
-      <thead>
-        <tr>
-          <th>Control</th><th>Type</th><th>Q-Sys Component</th><th>Control Name</th><th>Min</th><th>Max</th><th></th>
-        </tr>
-      </thead>
-      <tbody id="tbody"></tbody>
-    </table>
-  </div>
+  <!-- mount() builds the tab/filter toolbar and the table inside this element. -->
+  <div id="editor-root"></div>
 
   <footer>
     <button class="btn btn-primary" id="save-btn">Save</button>
     <button class="btn btn-warn" id="save-apply-btn">Save &amp; Apply</button>
     <span id="save-status"></span>
     <span class="spacer"></span>
+    <!-- Shows: recalling swaps the whole mapping set and hot-reloads the
+         bridge. The previous set is backed up first, so this is undoable. -->
+    <span id="active-show"></span>
+    <select id="show-select" title="Saved shows"></select>
+    <button class="btn btn-ghost" id="show-recall-btn">Recall</button>
+    <button class="btn btn-ghost" id="show-save-btn">Save as Show…</button>
+    <input id="show-name-input" class="hidden" placeholder="Show name" size="18">
   </footer>
 </div>
 
+<script src="/shared/mapping-editor.js"></script>
 <script>
-let physicalControls = []
-let components = []
-const ctrlCache = new Map()
-const assignments = new Map()
-let activeGroup = 'all'
-let filterText = ''
-
-function esc(str) {
-  return String(str).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
-}
+let editor = null
 
 async function api(path, opts) {
   const res = await fetch(path, { credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, ...opts })
   if (res.status === 401) { showLogin(); throw new Error('Session expired — please sign in again') }
   const body = await res.json().catch(() => ({}))
-  if (!res.ok) throw new Error(body.error || ('HTTP ' + res.status))
+  if (!res.ok) {
+    // Mappings the editor carries through untouched are re-validated on save,
+    // so a pre-existing malformed entry rejects the whole save. Without the
+    // per-entry reasons that is a dead end — there is no row to blame and no
+    // way to fix it from this page.
+    const why = Array.isArray(body.details)
+      ? ' — ' + body.details.map(d => `#${d.index}: ${d.reason}`).join('; ')
+      : ''
+    throw new Error((body.error || ('HTTP ' + res.status)) + why)
+  }
   return body
 }
 
@@ -182,17 +141,38 @@ document.getElementById('login-btn').addEventListener('click', async () => {
   }
 })
 
-function applyKnobAResult(result) {
-  for (const m of result.mappings) {
-    const pc = physicalControls.find(p => p.midi.type === m.midi.type && p.midi.channel === m.midi.channel && p.midi.number === m.midi.number)
-    if (!pc || pc.group !== 'Knobs A') continue
-    assignments.set(pc.id, {
-      component: m.qsys.component ?? '', controlName: m.qsys.control ?? '',
-      min: m.qsys.min ?? -100, max: m.qsys.max ?? 10, label: m.label ?? pc.label,
-    })
-  }
-  renderTable()
+// The revision of the config this page's table was built from. Every save
+// carries it so a tab left open across a recall cannot silently write its
+// stale snapshot back over the show — the server answers 409 instead.
+let revision = null
+
+// The shared editor owns all table state. The page supplies only transport.
+const adapter = {
+  loadEditorState: async () => {
+    const state = await api('/api/mappings')
+    revision = state.revision
+    showActive(state.activeShow)
+    return state
+  },
+  getQsysStatus: async () => {
+    try { await api('/api/qsys/components'); return { connected: true } }
+    catch (e) { return { connected: false, message: e.message } }
+  },
+  discoverComponents: async () => (await api('/api/qsys/components')).components,
+  getComponentControls: async (name) =>
+    (await api('/api/qsys/components/' + encodeURIComponent(name) + '/controls')).controls,
+  save: (m) => send('/api/mappings', m),
+  saveAndApply: (m) => send('/api/mappings/apply', m),
 }
+
+/** Posts mappings with the revision they were based on, and keeps the new one. */
+async function send(path, mappings) {
+  const result = await api(path, { method: 'POST', body: JSON.stringify({ mappings, revision }) })
+  revision = result.revision
+  return result
+}
+
+// ── Follow input router (Knob A) ─────────────────────────────────────────────
 
 async function initFollowRouter() {
   const toggle = document.getElementById('follow-router-toggle')
@@ -221,7 +201,8 @@ async function initFollowRouter() {
     status.textContent = 'Reading router…'
     try {
       const result = await api('/api/mappings/auto-map-knob-a', { method: 'POST' })
-      applyKnobAResult(result)
+      // Auto-map rewrote the saved mappings, so the table and revision are stale.
+      await editor.reload()
       const skipped = result.skipped.map(s => 'Knob A ' + s.strip + ': ' + s.reason).join('; ')
       status.className = skipped ? 'err' : 'ok'
       status.textContent = '✓ ' + result.changed.length + ' remapped' + (skipped ? ' — skipped: ' + skipped : '')
@@ -235,247 +216,102 @@ async function initFollowRouter() {
 let followRouterWired = false
 
 async function loadApp() {
-  const data = await api('/api/mappings')
-  physicalControls = data.physicalControls
-  assignments.clear()
-  for (const mObj of data.mappings) {
-    const pc = physicalControls.find(p =>
-      p.midi.type === mObj.midi.type && p.midi.channel === mObj.midi.channel && p.midi.number === mObj.midi.number)
-    if (pc) {
-      assignments.set(pc.id, {
-        component: mObj.qsys.component ?? '',
-        controlName: mObj.qsys.control ?? '',
-        min: mObj.qsys.min ?? -100,
-        max: mObj.qsys.max ?? 10,
-        label: mObj.label ?? pc.label,
-      })
-    }
-  }
-  await refreshComponents()
-  renderTable()
+  refreshShows().catch(() => { /* the table matters more than the show list */ })
+  editor = await MappingEditor.mount({
+    root: document.getElementById('editor-root'),
+    adapter,
+    onStatus: ({ kind, text }) => {
+      const el = document.getElementById('save-status')
+      el.className = kind === 'ok' ? 'ok' : kind === 'err' ? 'err' : ''
+      el.textContent = text
+    },
+  })
   if (!followRouterWired) {
     followRouterWired = true
     initFollowRouter().catch(e => console.error('Follow-router init error:', e))
   }
 }
 
-async function refreshComponents() {
+// ── Shows ────────────────────────────────────────────────────────────────────
+
+const showSelect = document.getElementById('show-select')
+const showNameInput = document.getElementById('show-name-input')
+
+function status(kind, text) {
+  const el = document.getElementById('save-status')
+  el.className = kind === 'ok' ? 'ok' : kind === 'err' ? 'err' : ''
+  el.textContent = text
+}
+
+/** Names the show the live mappings came from, so the header never implies none. */
+function showActive(active) {
+  document.getElementById('active-show').textContent = active ? 'Show: ' + active.name : ''
+}
+
+async function refreshShows() {
+  const { shows } = await api('/api/mappings/shows')
+  showSelect.textContent = ''
+  if (!shows.length) {
+    showSelect.appendChild(new Option('No shows saved yet', ''))
+    showSelect.disabled = true
+    return
+  }
+  showSelect.disabled = false
+  for (const s of shows) showSelect.appendChild(new Option(s.name + '  (' + s.count + ')', s.id))
+}
+
+document.getElementById('show-recall-btn').addEventListener('click', async () => {
+  const id = showSelect.value
+  if (!id) return
+  // The shared editor exposes no dirty flag, so confirm on every recall.
+  // Recall replaces the table wholesale, so cancelling must send nothing.
+  if (!confirm('Recalling a show replaces the current mapping table. Any unsaved edits will be lost. Continue?')) return
   try {
-    const data = await api('/api/qsys/components')
-    components = data.components
-    ctrlCache.clear()
+    status('info', 'Recalling…')
+    const r = await api('/api/mappings/shows/' + encodeURIComponent(id) + '/recall', { method: 'POST' })
+    // Recall rewrote the config, so the table and the revision are both stale.
+    await editor.reload()
+    status('ok', 'Recalled "' + r.name + '" — ' + r.count + ' mappings. Faders are not motorised; move each one before it is live.')
   } catch (e) {
-    components = []
-    const status = document.getElementById('save-status')
-    status.textContent = 'Q-Sys: ' + e.message
-    status.className = 'err'
+    status('err', e.message)
   }
-}
+})
 
-async function getControlsFor(componentName) {
-  if (ctrlCache.has(componentName)) return ctrlCache.get(componentName)
-  let controls = []
+document.getElementById('show-save-btn').addEventListener('click', async () => {
+  // Reveal-on-click input rather than prompt(), which Chromium disables in
+  // the Electron renderer — this keeps both hosts structurally identical.
+  if (showNameInput.classList.contains('hidden')) {
+    showNameInput.classList.remove('hidden')
+    showNameInput.focus()
+    return
+  }
+  const name = showNameInput.value.trim()
+  if (!name) { showNameInput.classList.add('hidden'); return }
   try {
-    const data = await api('/api/qsys/components/' + encodeURIComponent(componentName) + '/controls')
-    controls = data.controls
-    controls.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }))
-  } catch { /* manual entry fallback */ }
-  ctrlCache.set(componentName, controls)
-  return controls
-}
-
-function renderTable() {
-  const tbody = document.getElementById('tbody')
-  tbody.innerHTML = ''
-  const lf = filterText.toLowerCase()
-  let shown = 0
-  let lastGroup = null
-
-  for (const pc of physicalControls) {
-    if (activeGroup !== 'all' && pc.group !== activeGroup) continue
-    if (lf && !pc.label.toLowerCase().includes(lf) && !pc.id.toLowerCase().includes(lf)) continue
-
-    if (pc.group !== lastGroup) {
-      const gr = tbody.insertRow()
-      gr.className = 'group-row'
-      gr.insertCell().colSpan = 7
-      gr.cells[0].textContent = pc.group
-      lastGroup = pc.group
-    }
-
-    const a = assignments.get(pc.id)
-    const isToggle = pc.controlType === 'toggle'
-    const row = tbody.insertRow()
-    row.className = 'ctrl-row' + (a?.component ? ' assigned' : '')
-    row.dataset.id = pc.id
-
-    const tdLabel = row.insertCell()
-    tdLabel.className = 'td-label'
-    tdLabel.textContent = pc.label
-
-    const tdType = row.insertCell()
-    tdType.innerHTML = '<span class="badge badge-' + pc.controlType + '">' + pc.controlType + '</span>'
-
-    const tdComp = row.insertCell()
-    const compSel = document.createElement('select')
-    compSel.dataset.id = pc.id
-    compSel.className = 'comp-sel'
-    compSel.innerHTML = '<option value="">— unassigned —</option>' +
-      components.map(c => '<option value="' + esc(c.name) + '"' + (a?.component === c.name ? ' selected' : '') + '>' + esc(c.name) + '</option>').join('')
-    tdComp.appendChild(compSel)
-
-    const tdCtrl = row.insertCell()
-    const dlId = 'dl-' + pc.id
-    const ctrlInput = document.createElement('input')
-    ctrlInput.type = 'text'
-    ctrlInput.dataset.id = pc.id
-    ctrlInput.className = 'ctrl-input'
-    ctrlInput.placeholder = a?.component ? 'type or pick…' : '—'
-    ctrlInput.value = a?.controlName ?? ''
-    ctrlInput.disabled = !a?.component
-    ctrlInput.setAttribute('list', dlId)
-    const dl = document.createElement('datalist')
-    dl.id = dlId
-    tdCtrl.appendChild(ctrlInput)
-    tdCtrl.appendChild(dl)
-
-    const tdMin = row.insertCell()
-    const minInp = document.createElement('input')
-    minInp.type = 'number'; minInp.step = 'any'
-    minInp.dataset.id = pc.id; minInp.className = 'min-inp'
-    minInp.value = String(a?.min ?? -100)
-    minInp.disabled = isToggle || !a?.component
-    if (isToggle) minInp.style.visibility = 'hidden'
-    tdMin.appendChild(minInp)
-
-    const tdMax = row.insertCell()
-    const maxInp = document.createElement('input')
-    maxInp.type = 'number'; maxInp.step = 'any'
-    maxInp.dataset.id = pc.id; maxInp.className = 'max-inp'
-    maxInp.value = String(a?.max ?? 10)
-    maxInp.disabled = isToggle || !a?.component
-    if (isToggle) maxInp.style.visibility = 'hidden'
-    tdMax.appendChild(maxInp)
-
-    const tdClear = row.insertCell()
-    tdClear.className = 'td-clear'
-    const clearBtn = document.createElement('button')
-    clearBtn.className = 'clear-btn'
-    clearBtn.dataset.id = pc.id
-    clearBtn.textContent = '✕'
-    clearBtn.disabled = !a?.component
-    tdClear.appendChild(clearBtn)
-
-    if (a?.component && ctrlCache.has(a.component)) {
-      populateDatalist(dl, ctrlCache.get(a.component))
-    } else if (a?.component) {
-      getControlsFor(a.component).then(ctrls => populateDatalist(dl, ctrls))
-    }
-
-    shown++
-  }
-
-  document.getElementById('count-label').textContent = shown + ' of ' + physicalControls.length + ' controls'
-}
-
-function populateDatalist(dl, controls) {
-  dl.innerHTML = controls.map(c => '<option value="' + esc(c.name) + '">').join('')
-}
-
-document.getElementById('tbody').addEventListener('change', async e => {
-  const el = e.target
-  const id = el.dataset.id
-  if (!id) return
-  if (el.classList.contains('comp-sel')) {
-    const componentName = el.value
-    const a = assignments.get(id) ?? {}
-    if (!componentName) { assignments.delete(id); renderTable(); return }
-    assignments.set(id, { ...a, component: componentName, controlName: '', min: -100, max: 10 })
-    await getControlsFor(componentName)
-    renderTable()
-  }
-})
-
-document.getElementById('tbody').addEventListener('input', e => {
-  const el = e.target
-  const id = el.dataset.id
-  if (!id) return
-  const a = assignments.get(id) ?? {}
-  if (el.classList.contains('ctrl-input')) {
-    assignments.set(id, { ...a, controlName: el.value.trim() })
-  } else if (el.classList.contains('min-inp')) {
-    assignments.set(id, { ...a, min: parseFloat(el.value) || 0 })
-  } else if (el.classList.contains('max-inp')) {
-    assignments.set(id, { ...a, max: parseFloat(el.value) || 1 })
-  }
-})
-
-document.getElementById('tbody').addEventListener('click', e => {
-  const btn = e.target.closest('.clear-btn')
-  if (!btn) return
-  assignments.delete(btn.dataset.id)
-  renderTable()
-})
-
-document.getElementById('tabs').addEventListener('click', e => {
-  const tab = e.target.closest('.tab')
-  if (!tab) return
-  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'))
-  tab.classList.add('active')
-  activeGroup = tab.dataset.group
-  renderTable()
-})
-
-document.getElementById('filter-input').addEventListener('input', e => {
-  filterText = e.target.value
-  renderTable()
-})
-
-document.getElementById('refresh-btn').addEventListener('click', async () => {
-  await refreshComponents()
-  renderTable()
-})
-
-function buildMappings() {
-  const mappings = []
-  for (const pc of physicalControls) {
-    const a = assignments.get(pc.id)
-    if (!a?.component || !a?.controlName) continue
-    const isToggle = pc.controlType === 'toggle'
-    mappings.push({
-      label: a.label || pc.label,
-      midi: { ...pc.midi },
-      qsys: isToggle
-        ? { type: 'toggle', component: a.component, control: a.controlName }
-        : { type: 'component_control', component: a.component, control: a.controlName, min: a.min ?? -100, max: a.max ?? 10 },
+    // getMappings throws when the initial load failed, which is what stops a
+    // blank table being saved as a show.
+    const mappings = editor.getMappings()
+    const { show } = await api('/api/mappings/shows', {
+      method: 'POST', body: JSON.stringify({ name, mappings }),
     })
-  }
-  return mappings
-}
-
-document.getElementById('save-btn').addEventListener('click', async () => {
-  const status = document.getElementById('save-status')
-  status.className = ''; status.textContent = 'Saving…'
-  try {
-    const mappings = buildMappings()
-    const result = await api('/api/mappings', { method: 'POST', body: JSON.stringify(mappings) })
-    status.className = 'ok'; status.textContent = '✓ Saved — ' + result.count + ' mappings'
+    showNameInput.value = ''
+    showNameInput.classList.add('hidden')
+    await refreshShows()
+    showSelect.value = show.id
+    status('ok', 'Saved show "' + show.name + '" — ' + show.count + ' mappings')
   } catch (e) {
-    status.className = 'err'; status.textContent = '✗ ' + e.message
+    status('err', e.message)
   }
 })
 
-document.getElementById('save-apply-btn').addEventListener('click', async () => {
-  const status = document.getElementById('save-status')
-  status.className = ''; status.textContent = 'Applying…'
-  try {
-    const mappings = buildMappings()
-    const result = await api('/api/mappings/apply', { method: 'POST', body: JSON.stringify(mappings) })
-    status.className = 'ok'; status.textContent = '✓ Applied — ' + result.count + ' mappings'
-  } catch (e) {
-    status.className = 'err'; status.textContent = '✗ ' + e.message
-  }
+showNameInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') document.getElementById('show-save-btn').click()
+  if (e.key === 'Escape') { showNameInput.value = ''; showNameInput.classList.add('hidden') }
 })
+
+document.getElementById('refresh-btn').addEventListener('click', () => { if (editor) editor.refreshComponents() })
+document.getElementById('save-btn').addEventListener('click', () => { if (editor) editor.save() })
+document.getElementById('save-apply-btn').addEventListener('click', () => { if (editor) editor.saveAndApply() })
 
 checkSession().catch(e => {
   document.getElementById('login-error').textContent = 'Error: ' + e.message

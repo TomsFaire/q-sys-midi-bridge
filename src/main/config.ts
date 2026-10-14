@@ -2,6 +2,18 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { app } from 'electron'
 
+/**
+ * A second Q-SYS target ganged to the primary one — the right leg of a stereo
+ * pair. Either field may be omitted and is then inherited from the primary,
+ * which covers both topologies: `{ component }` alone means "other component,
+ * same control name", `{ control }` alone means "same component, other
+ * control". Only meaningful on component_control and toggle.
+ */
+export interface QsysLink {
+  component?: string
+  control?: string
+}
+
 export interface QsysRef {
   type: 'component_control' | 'toggle' | 'named_control' | 'snapshot'
   // component_control / toggle
@@ -15,6 +27,8 @@ export interface QsysRef {
   // scaling for CC mappings (dB range etc.)
   min?: number
   max?: number
+  // stereo gang — moves with the primary target
+  link?: QsysLink
 }
 
 export interface MidiRef {
@@ -29,6 +43,13 @@ export interface Mapping {
   qsys: QsysRef
 }
 
+/**
+ * @deprecated No longer read. LED feedback is derived from `mappings` — a note
+ * button bound to a toggle lights its own lamp. This array was maintained by
+ * hand and keyed the other way round (component → note), so reassigning a
+ * button in either editor left its lamp pointing at the old component. The
+ * type survives so existing configs still parse; the key is ignored.
+ */
 export interface FeedbackLED {
   component: string
   control: string
@@ -41,13 +62,20 @@ export interface Config {
   qsys: { host: string; port: number; username?: string; password?: string }
   midi: { deviceName: string }
   mappings: Mapping[]
-  feedback: { enabled: boolean; mute_leds: FeedbackLED[] }
+  // `enabled` is the master switch for LED feedback. `mute_leds` is ignored —
+  // see FeedbackLED. Optional so a config may simply omit it.
+  feedback: { enabled: boolean; mute_leds?: FeedbackLED[] }
   // UCI web server (serves foh-uci.html + relays browser WS to the Core).
   // Defaults when absent: enabled: true, port: 3001.
   uci?: { enabled?: boolean; port?: number; mappingsPasswordHash?: string }
   // When enabled, Knob A 1-8 follow the Input.Router: each is pointed at the
   // gain control of the source routed to Mic N. See router-follow.ts.
   follow_router?: Partial<import('./router-follow.js').FollowRouterConfig>
+  // Which saved show was last recalled. Written by the recall, and left alone
+  // by an ordinary mapping save — so an edit after a recall leaves this
+  // pointing at the show the mappings came from, which is what lets the UI
+  // say "Gala 2026 (edited)" rather than claiming the surface is untouched.
+  activeShow?: { id: string; name: string; appliedAt: string }
 }
 
 export function isValidPort(value: unknown): value is number {
@@ -114,6 +142,18 @@ export function seedUserConfig(): void {
  */
 export function findConfigPath(): string {
   return path.join(app.getPath('userData'), 'config.json')
+}
+
+/**
+ * Where saved shows live, beside config.json.
+ *
+ * electron-builder strips productName from the packaged package.json, so
+ * app.getName() is "midi-qsys-bridge" in both a packaged build and `npm
+ * start` — one userData directory, and a show saved in development is
+ * visible to the installed app.
+ */
+export function getShowsDir(): string {
+  return path.join(app.getPath('userData'), 'shows')
 }
 
 export { stripComments }

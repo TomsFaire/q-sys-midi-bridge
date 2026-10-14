@@ -19,8 +19,9 @@ const fakeMidi = { sendNoteOn() {}, sendNoteOff() {} }
 const config = (enabled: boolean): Config => ({
   qsys: { host: 'x', port: 1710 },
   midi: { deviceName: '' },
-  mappings: [],
-  feedback: { enabled: true, mute_leds: [{ component: 'Mic.01.Gain', control: 'mute', midi: { channel: 1, note: 1 } }] },
+  // Mute 1's lamp is derived from this mapping (feedback.mute_leds is ignored).
+  mappings: [{ midi: { type: 'cc', channel: 1, number: 22 }, qsys: { type: 'toggle', component: 'Mic.01.Gain', control: 'mute' } }],
+  feedback: { enabled: true },
   follow_router: { enabled },
 })
 
@@ -74,7 +75,7 @@ test('a later route change fires once for that strip only; the old crosspoint go
 test('router changes still work when mute-LED feedback is disabled', async () => {
   const qrc = new FakeQrc()
   const cfg = config(true)
-  cfg.feedback = { enabled: false, mute_leds: [] }
+  cfg.feedback = { enabled: false }
   const engine = new MappingEngine(qrc as never, fakeMidi as never, cfg)
   const fired: Array<[number, number]> = []
   engine.onRouteChange = (s, i) => fired.push([s, i])
