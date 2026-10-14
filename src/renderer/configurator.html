@@ -226,11 +226,31 @@ const { ipcRenderer, clipboard } = require('electron')
 // (IPC to the main process), the status pill and the overlay.
 let editor = null
 
+// The revision of the config this window's table was built from. Every save
+// carries it so a window left open across a show recall cannot write its stale
+// snapshot back over the show — the main process refuses instead.
+let revision = null
+
+/** Electron prefixes IPC rejections; strip it so the operator sees the plain message. */
+async function invokeSave(channel, mappings) {
+  try {
+    const result = await ipcRenderer.invoke(channel, mappings, revision)
+    revision = result.revision
+    return result
+  } catch (e) {
+    throw new Error(String(e.message).replace(/^Error invoking remote method '[^']*': (Error: )?/, ''))
+  }
+}
+
 const adapter = {
-  loadEditorState: async () => ({
-    physicalControls: await ipcRenderer.invoke('cfg:get-physical-controls'),
-    mappings: (await ipcRenderer.invoke('cfg:load-config')).mappings ?? [],
-  }),
+  loadEditorState: async () => {
+    const config = await ipcRenderer.invoke('cfg:load-config')
+    revision = config.revision
+    return {
+      physicalControls: await ipcRenderer.invoke('cfg:get-physical-controls'),
+      mappings: config.mappings ?? [],
+    }
+  },
   // Also drives the header pill, as the old refreshQsys did.
   getQsysStatus: async () => {
     const dot  = document.getElementById('status-dot')
@@ -250,8 +270,8 @@ const adapter = {
   },
   discoverComponents: () => ipcRenderer.invoke('cfg:discover-components'),
   getComponentControls: (name) => ipcRenderer.invoke('cfg:get-component-controls', name),
-  save: (m) => ipcRenderer.invoke('cfg:save-config', m),
-  saveAndApply: (m) => ipcRenderer.invoke('cfg:save-and-apply', m),
+  save: (m) => invokeSave('cfg:save-config', m),
+  saveAndApply: (m) => invokeSave('cfg:save-and-apply', m),
 }
 
 function onStatus({ kind, text }) {

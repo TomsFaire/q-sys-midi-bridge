@@ -775,8 +775,10 @@ test('configurator adapter maps every method to the right IPC channel and argume
   const calls: any[] = []
   const invoke = async (ch: string, ...args: any[]) => {
     calls.push([ch, ...args])
-    if (ch === 'cfg:load-config') return { mappings: [{ label: 'x' }] }
+    if (ch === 'cfg:load-config') return { mappings: [{ label: 'x' }], revision: 'r1' }
     if (ch === 'cfg:get-physical-controls') return [{ id: 'F1' }]
+    if (ch === 'cfg:save-config') return { revision: 'r2' }
+    if (ch === 'cfg:save-and-apply') return { revision: 'r3' }
     return { connected: true }
   }
   const p = await runConfigurator(invoke)
@@ -790,14 +792,23 @@ test('configurator adapter maps every method to the right IPC channel and argume
   await p.adapter.save(m)
   await p.adapter.saveAndApply(m)
   assert.deepEqual(calls, [
-    ['cfg:get-physical-controls'],
     ['cfg:load-config'],
+    ['cfg:get-physical-controls'],
     ['cfg:get-qsys-status'],
     ['cfg:discover-components'],
     ['cfg:get-component-controls', 'Mic 1'],
-    ['cfg:save-config', m],
-    ['cfg:save-and-apply', m],
+    ['cfg:save-config', m, 'r1'],        // the revision the window loaded with
+    ['cfg:save-and-apply', m, 'r2'],     // then the one the previous save returned
   ])
+})
+
+test('configurator adapter surfaces a stale-write refusal without the Electron IPC prefix', async () => {
+  const msg = 'The mappings changed on disk — a show may have been recalled. Reload before saving.'
+  const p = await runConfigurator(async (ch) => {
+    if (ch === 'cfg:save-config') throw new Error(`Error invoking remote method 'cfg:save-config': Error: ${msg}`)
+    return ch === 'cfg:get-physical-controls' ? [] : {}
+  })
+  await assert.rejects(p.adapter.save([]), (e: Error) => e.message === msg)
 })
 
 test('configurator adapter treats a config with no mappings key as empty', async () => {

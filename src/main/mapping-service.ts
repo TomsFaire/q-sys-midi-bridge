@@ -65,6 +65,31 @@ export function saveMappings(configFilePath: string, mappings: Mapping[]): void 
   patchConfig(configFilePath, { mappings })
 }
 
+/** Same wording as the HTTP page's 409, so both hosts tell the operator one story. */
+export const STALE_MAPPINGS_MESSAGE =
+  'The mappings changed on disk — a show may have been recalled. Reload before saving.'
+
+export class StaleMappingsError extends Error {
+  constructor() {
+    super(STALE_MAPPINGS_MESSAGE)
+    this.name = 'StaleMappingsError'
+  }
+}
+
+/**
+ * Saves only if the config is still the one the caller's table was built from.
+ * The revision check and the write share one synchronous section, so a recall
+ * cannot land between them. A missing or mismatched revision throws
+ * StaleMappingsError without writing. Returns the revision after the write.
+ */
+export function saveMappingsIfFresh(configFilePath: string, mappings: Mapping[], revision: unknown): string {
+  if (typeof revision !== 'string' || revision !== getMappingsRevision(configFilePath)) {
+    throw new StaleMappingsError()
+  }
+  saveMappings(configFilePath, mappings)
+  return getMappingsRevision(configFilePath)
+}
+
 export async function saveAndApplyMappings(
   configFilePath: string,
   mappings: Mapping[],
@@ -72,6 +97,18 @@ export async function saveAndApplyMappings(
 ): Promise<void> {
   saveMappings(configFilePath, mappings)
   if (onReload) await onReload()
+}
+
+/** saveMappingsIfFresh, then the hot-reload. Returns the revision after both. */
+export async function saveAndApplyMappingsIfFresh(
+  configFilePath: string,
+  mappings: Mapping[],
+  revision: unknown,
+  onReload?: () => Promise<void>,
+): Promise<string> {
+  saveMappingsIfFresh(configFilePath, mappings, revision)
+  if (onReload) await onReload()
+  return getMappingsRevision(configFilePath)
 }
 
 // ── Q-Sys discovery ───────────────────────────────────────────────────────────
