@@ -14,12 +14,14 @@ import { verifyPassword, SessionStore } from './auth.js'
 import {
   PHYSICAL_CONTROLS,
   loadMappings,
+  getMappingsRevision,
   saveMappings,
   saveAndApplyMappings,
   validateMappings,
   discoverComponents,
   getComponentControls,
 } from './mapping-service.js'
+import { listShows, writeShow, deleteShow, recallShow, RecallReloadError, ShowNotFoundError, ShowValidationError } from './show-service.js'
 
 const SESSION_COOKIE = 'mqb_mappings_session'
 
@@ -31,7 +33,56 @@ export class MappingsHttpHandler {
     private readonly configFilePath: string,
     private readonly mappingsHtmlPath: string,
     private readonly onReload?: () => Promise<void>,
+    private readonly showsDir?: string,
   ) {}
+
+  /**
+   * A fingerprint (content hash) of the config as it stands on disk.
+   *
+   * The page POSTs its whole in-memory array, so a tab left open across a
+   * recall holds a pre-recall snapshot and its next save would silently
+   * revert the show. Handing out a revision on read and requiring it on write
+   * turns that into a 409 the page can act on.
+   */
+  private revision(): string {
+    return getMappingsRevision(this.configFilePath)
+  }
+
+  /**
+   * Splits a save body into its mappings and the revision it was based on.
+   * A body with no revision is refused rather than trusted — a page cached
+   * from before this guard existed would otherwise slip straight past it.
+   */
+  private checkRevision(body: unknown): { ok: true; mappings: unknown } | { ok: false } {
+    if (!body || typeof body !== 'object' || Array.isArray(body)) return { ok: false }
+    const { mappings, revision } = body as { mappings?: unknown; revision?: unknown }
+    if (typeof revision !== 'string' || revision !== this.revision()) return { ok: false }
+    return { ok: true, mappings }
+  }
+
+  /** Which show the live mappings came from, for the page header. */
+  private activeShow(): unknown {
+    try {
+      const raw = fs.readFileSync(this.configFilePath, 'utf-8')
+      return (JSON.parse(stripComments(raw)) as { activeShow?: unknown }).activeShow ?? null
+    } catch {
+      return null
+    }
+  }
+
+  /** Typed errors from show-service become 404/400; anything else is our fault. */
+  private statusFor(err: unknown): number {
+    if (err instanceof ShowNotFoundError) return 404
+    if (err instanceof ShowValidationError) return 400
+    return 500
+  }
+
+  private sendStale(res: http.ServerResponse): void {
+    this.sendJson(res, 409, {
+      error: 'The mappings changed on disk — a show may have been recalled. Reload before saving.',
+      revision: this.revision(),
+    })
+  }
 
   /** Opens the discovery QRC connection. Call once, alongside UciServer.start(). */
   connect(coreHost: string, corePort: number, credentials?: QrcCredentials): void {
@@ -144,7 +195,12 @@ export class MappingsHttpHandler {
     if (pathname === '/api/mappings' && req.method === 'GET') {
       try {
         const mappings = loadMappings(this.configFilePath)
-        this.sendJson(res, 200, { physicalControls: PHYSICAL_CONTROLS, mappings })
+        this.sendJson(res, 200, {
+          physicalControls: PHYSICAL_CONTROLS,
+          mappings,
+          revision: this.revision(),
+          activeShow: this.activeShow(),
+        })
       } catch (err) {
         this.sendJson(res, 500, { error: (err as Error).message })
       }
@@ -153,21 +209,93 @@ export class MappingsHttpHandler {
 
     if (pathname === '/api/mappings' && req.method === 'POST') {
       this.readJsonBody(req).then((body) => {
-        const result = validateMappings(body)
+        const fresh = this.checkRevision(body)
+        if (!fresh.ok) { this.sendStale(res); return }
+        const result = validateMappings(fresh.mappings)
         if (!result.valid) { this.sendJson(res, 400, { error: 'Invalid mappings', details: result.errors }); return }
         saveMappings(this.configFilePath, result.mappings)
-        this.sendJson(res, 200, { ok: true, count: result.mappings.length })
+        this.sendJson(res, 200, { ok: true, count: result.mappings.length, revision: this.revision() })
       }).catch(() => this.sendJson(res, 400, { error: 'Invalid request body' }))
       return true
     }
 
     if (pathname === '/api/mappings/apply' && req.method === 'POST') {
       this.readJsonBody(req).then(async (body) => {
-        const result = validateMappings(body)
+        const fresh = this.checkRevision(body)
+        if (!fresh.ok) { this.sendStale(res); return }
+        const result = validateMappings(fresh.mappings)
         if (!result.valid) { this.sendJson(res, 400, { error: 'Invalid mappings', details: result.errors }); return }
         await saveAndApplyMappings(this.configFilePath, result.mappings, this.onReload)
-        this.sendJson(res, 200, { ok: true, count: result.mappings.length })
+        this.sendJson(res, 200, { ok: true, count: result.mappings.length, revision: this.revision() })
       }).catch((err) => this.sendJson(res, 400, { error: (err as Error).message ?? 'Invalid request body' }))
+      return true
+    }
+
+    // ── Shows ────────────────────────────────────────────────────────────────
+    // Nested under /api/mappings so they fall inside the auth gate above with
+    // no new auth code.
+
+    if (pathname === '/api/mappings/shows' && req.method === 'GET') {
+      this.sendJson(res, 200, { shows: this.showsDir ? listShows(this.showsDir) : [] })
+      return true
+    }
+
+    if (pathname === '/api/mappings/shows' && req.method === 'POST') {
+      this.readJsonBody(req).then((body) => {
+        if (!this.showsDir) { this.sendJson(res, 503, { error: 'Shows are not available' }); return }
+        const { name, mappings } = (body ?? {}) as { name?: unknown; mappings?: unknown }
+        if (typeof name !== 'string' || !name.trim()) {
+          this.sendJson(res, 400, { error: 'A show needs a name' }); return
+        }
+        // A show that recall would refuse is a trap set for the operator, so
+        // it is validated on the way in, not only on the way out.
+        const result = validateMappings(mappings)
+        if (!result.valid) { this.sendJson(res, 400, { error: 'Invalid mappings', details: result.errors }); return }
+        try {
+          this.sendJson(res, 200, { ok: true, show: writeShow(this.showsDir, name, result.mappings) })
+        } catch (err) {
+          this.sendJson(res, 400, { error: (err as Error).message })
+        }
+      }).catch(() => this.sendJson(res, 400, { error: 'Invalid request body' }))
+      return true
+    }
+
+    const recall = pathname.match(/^\/api\/mappings\/shows\/([^/]+)\/recall$/)
+    if (recall && req.method === 'POST') {
+      if (!this.showsDir) { this.sendJson(res, 503, { error: 'Shows are not available' }); return true }
+      let id: string
+      try { id = decodeURIComponent(recall[1]) } catch { this.sendJson(res, 400, { error: 'Bad show id' }); return true }
+      const showsDir = this.showsDir
+      ;(async () => {
+        // Past recallShow's config write the surface HAS changed, so nothing
+        // after it may be reported as a client error.
+        let r: Awaited<ReturnType<typeof recallShow>>
+        try {
+          r = await recallShow(showsDir, id, this.configFilePath, this.onReload)
+        } catch (err) {
+          if (err instanceof RecallReloadError) {
+            this.sendJson(res, 500, { error: err.message, applied: true, revision: getMappingsRevision(this.configFilePath) })
+          } else {
+            this.sendJson(res, this.statusFor(err), { error: (err as Error).message })
+          }
+          return
+        }
+        this.sendJson(res, 200, { ok: true, ...r, revision: this.revision() })
+      })().catch((err) => {
+        if (!res.headersSent) this.sendJson(res, 500, { error: (err as Error).message, applied: true })
+      })
+      return true
+    }
+
+    const show = pathname.match(/^\/api\/mappings\/shows\/([^/]+)$/)
+    if (show && req.method === 'DELETE') {
+      if (!this.showsDir) { this.sendJson(res, 503, { error: 'Shows are not available' }); return true }
+      try {
+        deleteShow(this.showsDir, decodeURIComponent(show[1]))
+        this.sendJson(res, 200, { ok: true })
+      } catch (err) {
+        this.sendJson(res, this.statusFor(err), { error: (err as Error).message })
+      }
       return true
     }
 

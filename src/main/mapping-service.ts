@@ -6,6 +6,7 @@
  */
 
 import fs from 'node:fs'
+import crypto from 'node:crypto'
 import { QrcClient } from './qrc-client.js'
 import { stripComments } from './config.js'
 import type { Mapping } from './config.js'
@@ -22,17 +23,71 @@ function parseConfigFile(raw: string): Record<string, unknown> {
   return JSON.parse(stripComments(raw)) as Record<string, unknown>
 }
 
+/**
+ * Fingerprint of the config as it stands on disk — a sha1 of its contents.
+ * Unlike mtime+size it cannot miss a same-size rewrite inside one timestamp
+ * tick. Shared by the HTTP page and the Configurator window so both compare
+ * the same thing. A missing file yields a stable sentinel rather than throwing.
+ */
+export function getMappingsRevision(configPath: string): string {
+  try {
+    return crypto.createHash('sha1').update(fs.readFileSync(configPath)).digest('hex')
+  } catch {
+    return 'missing'
+  }
+}
+
 export function loadMappings(configFilePath: string): Mapping[] {
   const raw = fs.readFileSync(configFilePath, 'utf-8')
   const config = parseConfigFile(raw)
   return (config.mappings as Mapping[] | undefined) ?? []
 }
 
-export function saveMappings(configFilePath: string, mappings: Mapping[]): void {
+/**
+ * Merges top-level keys into the config in a single atomic write.
+ *
+ * One write matters when more than one key changes together: a recall sets
+ * `mappings` and `activeShow`, and two writes would leave a window where the
+ * config names one show but holds another's mappings — a crash in between
+ * makes that permanent. The temp-then-rename also means a full disk truncates
+ * a scratch file rather than the config the app needs to boot.
+ */
+export function patchConfig(configFilePath: string, patch: Record<string, unknown>): void {
   const raw = fs.readFileSync(configFilePath, 'utf-8')
   const config = parseConfigFile(raw)
-  config.mappings = mappings
-  fs.writeFileSync(configFilePath, JSON.stringify(config, null, 2), 'utf-8')
+  Object.assign(config, patch)
+  const tmp = `${configFilePath}.tmp`
+  fs.writeFileSync(tmp, JSON.stringify(config, null, 2), 'utf-8')
+  fs.renameSync(tmp, configFilePath)
+}
+
+export function saveMappings(configFilePath: string, mappings: Mapping[]): void {
+  patchConfig(configFilePath, { mappings })
+}
+
+/** Same wording as the HTTP page's 409, so both hosts tell the operator one story. */
+export const STALE_MAPPINGS_MESSAGE =
+  'The mappings changed on disk — a show may have been recalled. Reload before saving.'
+
+export class StaleMappingsError extends Error {
+  constructor() {
+    super(STALE_MAPPINGS_MESSAGE)
+    this.name = 'StaleMappingsError'
+  }
+}
+
+/**
+ * Saves only if the config is still the one the caller's table was built from.
+ * The revision check and the write share one synchronous section, so a recall
+ * cannot land between them. A missing or mismatched revision throws
+ * StaleMappingsError without writing. Returns the revision after the write.
+ */
+export function saveMappingsIfFresh(configFilePath: string, mappings: Mapping[], revision: unknown): string {
+  if (typeof revision !== 'string' || revision !== getMappingsRevision(configFilePath)) {
+    throw new StaleMappingsError()
+  }
+  saveMappings(configFilePath, mappings)
+  return getMappingsRevision(configFilePath)
 }
 
 export async function saveAndApplyMappings(
@@ -42,6 +97,18 @@ export async function saveAndApplyMappings(
 ): Promise<void> {
   saveMappings(configFilePath, mappings)
   if (onReload) await onReload()
+}
+
+/** saveMappingsIfFresh, then the hot-reload. Returns the revision after both. */
+export async function saveAndApplyMappingsIfFresh(
+  configFilePath: string,
+  mappings: Mapping[],
+  revision: unknown,
+  onReload?: () => Promise<void>,
+): Promise<string> {
+  saveMappingsIfFresh(configFilePath, mappings, revision)
+  if (onReload) await onReload()
+  return getMappingsRevision(configFilePath)
 }
 
 // ── Q-Sys discovery ───────────────────────────────────────────────────────────
