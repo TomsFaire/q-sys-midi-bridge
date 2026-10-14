@@ -937,6 +937,20 @@ function subscribeMeters(controlNames) {
     user-select: none;
     -webkit-user-select: none;
   }
+  /* Open states: handle splits into two tap zones (left / right half). */
+  .meters-handle.split { gap: 0; }
+  .meters-handle.split #meters-title,
+  .meters-handle.split #meters-arrow { display: none; }
+  .meters-zone {
+    flex: 1 1 0;
+    align-self: stretch;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .meters-zone[hidden] { display: none; }
+  #meters-left { border-right: 1px solid var(--border); }
+  .meters-zone:active { background: var(--border); }
 
   .meters-content {
     flex: 1 1 0;
@@ -1372,8 +1386,10 @@ function subscribeMeters(controlNames) {
 <!-- Meters drawer (fixed, landscape only, z-index below processing sheet) -->
 <div id="meters-drawer" class="meters-drawer collapsed">
   <div id="meters-handle" class="meters-handle">
-    <span>Meters</span>
+    <span id="meters-title">Meters</span>
     <span id="meters-arrow">↑</span>
+    <span id="meters-left" class="meters-zone" hidden></span>
+    <span id="meters-right" class="meters-zone" hidden></span>
   </div>
   <div id="meters-content" class="meters-content"></div>
 </div>
@@ -3301,8 +3317,13 @@ function setDrawerState(state) {
   DRAWER_STATES.forEach(s => drawer.classList.remove(s));
   drawer.classList.add(state);
   drawerState = state;
-  const arrow = document.getElementById('meters-arrow');
-  arrow.textContent = state === 'full-screen' ? '↓' : state === 'half-open' ? '↕' : '↑';
+  const split = state !== 'collapsed';
+  document.getElementById('meters-handle').classList.toggle('split', split);
+  const left = document.getElementById('meters-left');
+  const right = document.getElementById('meters-right');
+  left.hidden = right.hidden = !split;
+  left.textContent = state === 'full-screen' ? '⤓ Drawer' : '⤢ Full';
+  right.textContent = '✕ Close';
   if (state === 'collapsed') pauseVuAll(); else resumeVuAll();
 }
 
@@ -3330,10 +3351,15 @@ function setDrawerState(state) {
     swipeStartY = null;
   });
 
-  handle.addEventListener('click', function() {
+  // collapsed: any tap opens the drawer. Open states: left half goes up/down
+  // one level (drawer <-> full), right half always closes.
+  handle.addEventListener('click', function(e) {
     if (swipeHandled) { swipeHandled = false; return; }
-    const idx = DRAWER_STATES.indexOf(drawerState);
-    setDrawerState(DRAWER_STATES[(idx + 1) % DRAWER_STATES.length]);
+    if (drawerState === 'collapsed') { setDrawerState('half-open'); return; }
+    const rect = handle.getBoundingClientRect();
+    const isLeft = e.clientX < rect.left + rect.width / 2;
+    if (!isLeft) setDrawerState('collapsed');
+    else setDrawerState(drawerState === 'half-open' ? 'full-screen' : 'half-open');
   });
 })();
 
