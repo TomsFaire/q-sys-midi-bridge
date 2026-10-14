@@ -28,6 +28,14 @@ export class Bridge extends EventEmitter {
    * this.engine at run time, so a rebuilt engine is honoured.
    */
   private changeGroup = new CoalescingRunner(() => this.engine.setupChangeGroup())
+  /**
+   * Follow-router rewrites (remaps and reconciles) run strictly one at a time:
+   * each is a load-modify-save of config.json plus a reload, and two in flight
+   * would clobber each other. The tail never rejects.
+   */
+  private remapChain: Promise<unknown> = Promise.resolve()
+  /** Strips whose route changed since the last flush; one flush per tick covers them all. */
+  private pendingStrips = new Set<number>()
 
   constructor(config: Config) {
     super()
@@ -39,9 +47,16 @@ export class Bridge extends EventEmitter {
     this.midi = new MidiIO(config.midi.deviceName)
     this.engine = new MappingEngine(this.qrc, this.midi, config)
     // A route changed in Q-SYS/UCI: retarget only that strip's Knob A.
+    // A scene recall flips several routers in one push, so collect the strips
+    // and remap them together once the push has been fully read.
     this.engine.onRouteChange = (strip) => {
-      this.applyAutoMap(this.engine.getRoutes(), [strip]).catch((err) => {
-        console.error(`[Bridge] Follow-router remap of strip ${strip} failed: ${err.message}`)
+      if (this.pendingStrips.size === 0) queueMicrotask(() => this.flushRemaps())
+      this.pendingStrips.add(strip)
+    }
+    // Routes may have changed while the Core link was down or the app was off.
+    this.engine.onBaselined = () => {
+      this.serialize(() => this.reconcile()).catch((err) => {
+        console.error(`[Bridge] Follow-router reconcile failed: ${err.message}`)
       })
     }
 
@@ -79,7 +94,7 @@ export class Bridge extends EventEmitter {
   }
 
   /** Hot-reload config from disk without restarting the app. */
-  async reloadConfig(): Promise<void> {
+  async reloadConfig(opts: { reconcile?: boolean } = {}): Promise<void> {
     const newConfig = loadConfig()
     // Credentials and port matter as much as the host: any of them changing
     // means the existing socket is talking to the wrong place, or as the
@@ -119,6 +134,16 @@ export class Bridge extends EventEmitter {
 
     this.emit('status-change')
     console.log('[Bridge] Config hot-reloaded')
+
+    // An editor page left open can post stale Knob A rows over the follow-managed
+    // ones. Put them right before returning, so the revision the save endpoints
+    // hand back (computed after this resolves) already includes the rewrite.
+    // applyAutoMap's own reload passes reconcile: false.
+    if (opts.reconcile !== false) {
+      await this.serialize(() => this.reconcile()).catch((err) => {
+        console.error(`[Bridge] Follow-router reconcile failed: ${err.message}`)
+      })
+    }
   }
 
   get followRouterEnabled(): boolean {
@@ -135,7 +160,31 @@ export class Bridge extends EventEmitter {
   async autoMapKnobAFromRouter(): Promise<AutoMapResult> {
     if (!this.followRouterEnabled) throw new Error('Follow input router is turned off')
     const routes = await this.engine.readRoutes()
-    return this.applyAutoMap(routes)
+    return this.serialize(() => this.applyAutoMap(routes))
+  }
+
+  private serialize<T>(task: () => Promise<T>): Promise<T> {
+    const run = this.remapChain.then(task)
+    this.remapChain = run.catch(() => undefined)
+    return run
+  }
+
+  private flushRemaps(): void {
+    const strips = [...this.pendingStrips]
+    this.pendingStrips.clear()
+    this.serialize(() => this.applyAutoMap(this.engine.getRoutes(), strips)).catch((err) => {
+      console.error(`[Bridge] Follow-router remap of strip(s) ${strips.join(', ')} failed: ${err.message}`)
+    })
+  }
+
+  /**
+   * Point every Knob A at its currently routed source. Idempotent: a pass that
+   * finds nothing to change writes and reloads nothing. Does nothing until the
+   * Core's routing is actually known.
+   */
+  private async reconcile(): Promise<void> {
+    if (!this.engine.routesKnown || !this.qrc.isConnected) return
+    await this.applyAutoMap(this.engine.getRoutes())
   }
 
   private async applyAutoMap(routes: Map<number, number>, only?: number[]): Promise<AutoMapResult> {
@@ -144,7 +193,7 @@ export class Bridge extends EventEmitter {
     const result = autoMapKnobA(loadMappings(configPath), routes, cfg, only)
     if (result.changed.length > 0) {
       saveMappings(configPath, result.mappings)
-      await this.reloadConfig()
+      await this.reloadConfig({ reconcile: false })
       console.log(`[Bridge] Knob A remapped for strip(s) ${result.changed.join(', ')}`)
     }
     return result
@@ -164,6 +213,9 @@ export class Bridge extends EventEmitter {
   private wireQrcEvents(connectMessage: string): void {
     this.qrc.on('connect', () => {
       console.log(`[QRC] ${connectMessage}`)
+      // Whatever we knew about routing is unverified on a fresh link; the
+      // rebuild below re-baselines it.
+      this.engine.resetRouteBaseline()
       this.requestChangeGroup('setupChangeGroup error')
       this.emit('status-change')
     })
