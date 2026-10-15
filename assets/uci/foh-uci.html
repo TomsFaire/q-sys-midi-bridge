@@ -41,6 +41,13 @@
     33–34 = Rec L/R
 -->
 <script>
+// uciSessionLost: true only when the bridge has a password set and this browser
+// no longer has a session (24h expiry). Unknown state is never "lost", so a
+// failed probe cannot cause a reload loop.
+function uciSessionLost(info) {
+  return !!info && info.passwordSet === true && info.authenticated === false;
+}
+
 // QRCClient — WebSocket wrapper that mirrors the qrc.js API surface.
 // Connects to the /qrc relay endpoint (Node.js Option B, or Lua Option A).
 // Only window.location.host changes between deployment options.
@@ -74,6 +81,12 @@ const QRC = (() => {
 
     ws.onclose = () => {
       emit('close');
+      // With a password set, an expired session makes every reconnect a 401.
+      // Reload instead, so the bridge serves the sign-in page.
+      fetch('/api/mappings/session', { credentials: 'same-origin' })
+        .then(r => r.json())
+        .then(info => { if (uciSessionLost(info)) location.reload(); })
+        .catch(() => {});
       // Reconnect after 2s
       reconnectTimer = setTimeout(() => doConnect(connectUrl), 2000);
     };
@@ -324,6 +337,26 @@ function subscribeMeters(controlNames) {
   /* ── Page containers ──────────────────────────────────────────── */
   .page { display: none; flex: 1; flex-direction: column; overflow: hidden; }
   .page.active { display: flex; }
+
+  /* ── Mappings page (the bridge's /mappings editor, framed) ─────── */
+  #mappings-message {
+    margin: auto;
+    max-width: 420px;
+    padding: 24px;
+    text-align: center;
+    color: var(--subdued);
+    font-size: 14px;
+    line-height: 1.5;
+  }
+  #mappings-frame-host { flex: 1; display: flex; min-height: 0; }
+  #mappings-frame-host[hidden] { display: none; }
+  #mappings-frame-host iframe {
+    flex: 1;
+    width: 100%;
+    height: 100%;
+    border: 0;
+    background: var(--bg);
+  }
 
   /* ── Bank + sends bars ────────────────────────────────────────── */
   #inputs-controls {
@@ -1052,6 +1085,7 @@ function subscribeMeters(controlNames) {
   <button class="tab-btn"        data-tab="outputs">Outputs</button>
   <button class="tab-btn"        data-tab="routing">Routing</button>
   <button class="tab-btn"        data-tab="patch">Patch</button>
+  <button class="tab-btn" id="tab-mappings" data-tab="mappings" hidden>Mappings</button>
   <button id="fullscreen-btn" class="fullscreen-btn">Full Screen</button>
 </div>
 
@@ -1406,6 +1440,13 @@ function subscribeMeters(controlNames) {
   <div class="xp-pop-footer">
     <button id="xp-pop-close" class="xp-pop-close">Done</button>
   </div>
+</div>
+
+<!-- MAPPINGS page: the bridge's own /mappings editor, loaded lazily into an iframe.
+     The server enforces the mappings password when one is set; showing this tab is UX only. -->
+<div id="page-mappings" class="page">
+  <div id="mappings-message" hidden></div>
+  <div id="mappings-frame-host"></div>
 </div>
 
 <!-- PATCH page -->
@@ -2023,6 +2064,78 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
     btn.classList.add('active');
     document.getElementById('page-' + btn.dataset.tab).classList.add('active');
   });
+});
+
+// ── Mappings tab ───────────────────────────────────────────────────────────────
+// The tab only exists when this page is served by the bridge, which is the one
+// host that answers /api/mappings/session. Anything else leaves it hidden.
+// probe: { status, body } from the session endpoint, or null if the request failed.
+function mappingsTabState(probe) {
+  if (!probe || probe.status !== 200) return 'hidden';
+  const body = probe.body;
+  if (!body || typeof body !== 'object' || typeof body.passwordSet !== 'boolean') return 'hidden';
+  // Ready whether or not a password is set: with none, the editor is open and
+  // the editor page itself explains how to set one.
+  return 'ready';
+}
+
+// What the page shows for each state, so it is never blank while the probe runs.
+function mappingsPageView(state) {
+  if (state === 'ready') return { message: '', showFrame: true };
+  if (state === 'checking') return { message: 'Checking\u2026', showFrame: false };
+  return { message: 'The mappings editor is not available from this server.', showFrame: false };
+}
+
+// Creates the editor iframe on first call only, so UCI startup is unchanged and
+// edits survive switching tabs.
+function ensureMappingsFrame(host, doc) {
+  if (host.querySelector('iframe')) return false;
+  const frame = doc.createElement('iframe');
+  frame.title = 'Mappings editor';
+  frame.src = '/mappings';
+  host.appendChild(frame);
+  return true;
+}
+
+async function probeMappingsSession() {
+  let timer;
+  try {
+    const ctrl = new AbortController();
+    timer = setTimeout(() => ctrl.abort(), 4000);
+    const res = await fetch('/api/mappings/session', { credentials: 'same-origin', signal: ctrl.signal });
+    let body = null;
+    try { body = await res.json(); } catch (_) { /* not JSON: not the bridge */ }
+    return { status: res.status, body };
+  } catch (_) {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Re-checks the password state each time the tab opens, so one set after page
+// load is picked up. The iframe is only created once the password is set.
+let mappingsShowSeq = 0;
+async function showMappingsPage() {
+  const msg = document.getElementById('mappings-message');
+  const host = document.getElementById('mappings-frame-host');
+  const seq = ++mappingsShowSeq;
+  const render = state => {
+    const view = mappingsPageView(state);
+    msg.textContent = view.message;
+    msg.hidden = !view.message;
+    host.hidden = !view.showFrame;
+    if (view.showFrame) ensureMappingsFrame(host, document);
+  };
+  // Keep an already-open editor on screen while re-checking.
+  if (!host.querySelector('iframe')) render('checking');
+  const state = mappingsTabState(await probeMappingsSession());
+  if (seq === mappingsShowSeq) render(state);
+}
+
+document.getElementById('tab-mappings').addEventListener('click', showMappingsPage);
+probeMappingsSession().then(probe => {
+  if (mappingsTabState(probe) !== 'hidden') document.getElementById('tab-mappings').hidden = false;
 });
 
 // ── Fullscreen toggle ──────────────────────────────────────────────────────────

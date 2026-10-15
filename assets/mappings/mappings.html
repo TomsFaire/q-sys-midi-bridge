@@ -26,6 +26,10 @@
   .btn-warn:hover { background: #cc7800; }
   .hidden { display: none !important; }
 
+  #no-password-note { display: flex; align-items: center; gap: 8px; padding: 5px 16px; font-size: 11px; color: var(--text-dim); background: var(--surface); border-bottom: 1px solid var(--border); }
+  #no-password-note span { flex: 1; }
+  #no-password-note button { background: transparent; color: var(--text-dim); font-size: 14px; line-height: 1; padding: 0 4px; }
+
   #login-view { flex: 1; display: flex; align-items: center; justify-content: center; }
   .login-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 28px; width: 300px; display: flex; flex-direction: column; gap: 12px; }
   .login-card h2 { font-size: 15px; font-weight: 600; }
@@ -53,7 +57,6 @@
     <input type="password" id="login-password" placeholder="Password">
     <button class="btn btn-primary" id="login-btn">Sign in</button>
     <p class="err" id="login-error"></p>
-    <p class="hint" id="login-setup-hint"></p>
   </div>
 </div>
 
@@ -67,6 +70,11 @@
   <button class="btn btn-ghost" id="auto-map-btn" disabled title="Point Knob A 1-8 at the gain control of the source currently routed to each Mic strip">Auto-map Knob A</button>
   <span id="auto-map-status"></span>
   </header>
+
+  <div id="no-password-note" class="hidden">
+    <span>No password is set, so anyone who can reach this bridge can use the mixer and edit mappings. To require one for everything: desktop app &rarr; Configure Mappings &rarr; Network.</span>
+    <button id="no-password-dismiss" title="Dismiss" aria-label="Dismiss">&times;</button>
+  </div>
 
   <!-- mount() builds the tab/filter toolbar and the table inside this element. -->
   <div id="editor-root"></div>
@@ -119,13 +127,15 @@ function showApp() {
 
 async function checkSession() {
   const info = await api('/api/mappings/session')
-  if (!info.passwordSet) {
-    document.getElementById('login-setup-hint').textContent =
-      'No password set yet — open the Configurator on the bridge Mac (Network panel) to set one.'
-    document.getElementById('login-btn').disabled = true
-  }
+  // With no password the server is open (info.authenticated is true), so the
+  // user goes straight in; the note only says how to set one.
+  document.getElementById('no-password-note').classList[info.passwordSet ? 'add' : 'remove']('hidden')
   if (info.authenticated) { await loadApp(); showApp() } else { showLogin() }
 }
+
+document.getElementById('no-password-dismiss').addEventListener('click', () => {
+  document.getElementById('no-password-note').classList.add('hidden')
+})
 
 document.getElementById('login-btn').addEventListener('click', async () => {
   const password = document.getElementById('login-password').value

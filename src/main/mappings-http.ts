@@ -119,8 +119,29 @@ export class MappingsHttpHandler {
     return null
   }
 
-  private isAuthenticated(req: http.IncomingMessage): boolean {
-    return this.sessions.isValid(this.getSessionToken(req))
+  /**
+   * True only when the config was read and holds no password. A config that
+   * cannot be read or parsed is NOT open: failing open on a read error would
+   * hand the editor to anyone who can break the file.
+   */
+  private isOpen(): boolean {
+    try {
+      const raw = fs.readFileSync(this.configFilePath, 'utf-8')
+      const config = JSON.parse(stripComments(raw)) as Record<string, unknown>
+      const uci = (config.uci as Record<string, unknown> | undefined) ?? {}
+      return !uci.mappingsPasswordHash
+    } catch {
+      return false
+    }
+  }
+
+  /**
+   * With no password set the editor is open (secured-VLAN installs don't need
+   * one); once a password is set every route needs a session. Read per request,
+   * so setting a password takes effect without a restart.
+   */
+  isAuthenticated(req: http.IncomingMessage): boolean {
+    return this.isOpen() || this.sessions.isValid(this.getSessionToken(req))
   }
 
   private sendJson(res: http.ServerResponse, status: number, body: unknown): void {
