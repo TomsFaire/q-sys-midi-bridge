@@ -202,8 +202,9 @@
     </div>
     <div class="net-row">
       <span class="net-label">Mappings Page</span>
-      <input type="password" id="mappings-password-input" placeholder="Set a password to enable /mappings" style="flex:1;max-width:200px">
+      <input type="password" id="mappings-password-input" placeholder="Optional — set a password for the UCI and /mappings" style="flex:1;max-width:260px">
       <button class="btn btn-ghost" id="mappings-password-save-btn">Save</button>
+      <button class="btn btn-ghost hidden" id="mappings-password-clear-btn" title="Make the UCI and /mappings open to anyone on the network">Remove password</button>
       <span id="mappings-password-status" style="font-size:11px;color:var(--text-dim)"></span>
     </div>
     <div class="net-hint" id="net-hint"></div>
@@ -388,9 +389,7 @@ async function initNetwork() {
   }
 
   try {
-    const hasPassword = await ipcRenderer.invoke('cfg:has-mappings-password')
-    document.getElementById('mappings-password-input').placeholder =
-      hasPassword ? 'Password set — enter a new one to change it' : 'Set a password to enable /mappings'
+    showMappingsPasswordState(await ipcRenderer.invoke('cfg:has-mappings-password'))
   } catch { /* leave default placeholder */ }
 }
 
@@ -465,6 +464,28 @@ document.getElementById('uci-restart-btn').addEventListener('click', () => {
   ipcRenderer.invoke('cfg:restart-app')
 })
 
+// The Remove button only exists while a password is set.
+function showMappingsPasswordState(hasPassword) {
+  document.getElementById('mappings-password-input').placeholder = hasPassword
+    ? 'Password set — enter a new one to change it'
+    : 'Optional — set a password for the UCI and /mappings'
+  document.getElementById('mappings-password-clear-btn').classList[hasPassword ? 'remove' : 'add']('hidden')
+}
+
+document.getElementById('mappings-password-clear-btn').addEventListener('click', async () => {
+  const status = document.getElementById('mappings-password-status')
+  if (!confirm('Remove the password? The UCI mixer and the mappings page will be open to anyone who can reach this bridge on the network.')) return
+  try {
+    await ipcRenderer.invoke('cfg:clear-mappings-password')
+    status.textContent = '✓ Password removed — UCI and mappings are open'
+    status.style.color = 'var(--green)'
+    showMappingsPasswordState(false)
+  } catch (err) {
+    status.textContent = '✗ ' + err.message
+    status.style.color = 'var(--red)'
+  }
+})
+
 document.getElementById('mappings-password-save-btn').addEventListener('click', async () => {
   const input = document.getElementById('mappings-password-input')
   const status = document.getElementById('mappings-password-status')
@@ -473,7 +494,7 @@ document.getElementById('mappings-password-save-btn').addEventListener('click', 
     status.textContent = '✓ Saved'
     status.style.color = 'var(--green)'
     input.value = ''
-    input.placeholder = 'Password set — enter a new one to change it'
+    showMappingsPasswordState(true)
   } catch (err) {
     status.textContent = '✗ ' + err.message
     status.style.color = 'var(--red)'

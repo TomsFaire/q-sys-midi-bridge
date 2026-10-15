@@ -757,13 +757,14 @@ test('mappings page: with no password set the user goes straight into the editor
 
 const CONFIGURATOR_HTML = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'renderer', 'configurator.html'), 'utf-8')
 
-function runConfigurator(invoke: (ch: string, ...a: any[]) => any = async () => ({})) {
+function runConfigurator(invoke: (ch: string, ...a: any[]) => any = async () => ({}), extra: Record<string, any> = {}) {
   const ipcHandlers = new Map<string, (...a: any[]) => any>()
   return runPageScript(CONFIGURATOR_HTML, {
     require: (m: string) => {
       if (m !== 'electron') throw new Error('unexpected require ' + m)
       return { ipcRenderer: { invoke, on(ch: string, fn: any) { ipcHandlers.set(ch, fn) }, send() {} }, clipboard: { writeText() {} } }
     },
+  ...extra,
   }).then(p => ({ ...p, ipcHandlers }))
 }
 
@@ -1064,4 +1065,31 @@ test('setFollowLocked before the first mapping is fine and a reload keeps reflec
   await ed.reload()   // the bridge re-pointed Knob A in the background
   assert.equal(rowOf(ed, 'Ka1').querySelector('.comp-sel').value, GAIN3.name)
   assert.ok(hasClass(rowOf(ed, 'Ka1'), 'locked'))
+})
+
+// ── Removing the mappings password ──────────────────────────────────────────
+
+test('configurator: Remove password asks first, then clears and reports it', async () => {
+  const calls: string[] = []
+  let confirmed = false
+  const p = await runConfigurator(async (ch) => {
+    calls.push(ch)
+    if (ch === 'cfg:has-mappings-password') return true
+    return {}
+  }, { confirm: () => confirmed })
+  calls.length = 0
+  const click = p.listeners.get('mappings-password-clear-btn')!.click
+
+  await click()
+  assert.ok(!calls.includes('cfg:clear-mappings-password'), 'declining the prompt must not clear anything')
+
+  confirmed = true
+  await click()
+  assert.ok(calls.includes('cfg:clear-mappings-password'))
+  assert.match(p.els.get('mappings-password-status').textContent, /removed/i)
+})
+
+test('configurator: the password row says it is optional, not required to use the page', () => {
+  assert.match(CONFIGURATOR_HTML, /id="mappings-password-clear-btn"/)
+  assert.doesNotMatch(CONFIGURATOR_HTML, /Set a password to enable \/mappings/)
 })

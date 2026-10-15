@@ -509,6 +509,8 @@ and this page shows a small dismissible notice saying how to set one. On a
 shared or untrusted network, open **Configure Mappings… → Network** and set a
 **Mappings Page** password; from then on the UCI and this page both require
 the same sign-in (one password, one 24-hour session per browser).
+To go back to open, use **Remove password** in the same panel (saving a blank
+password is rejected on purpose, so it can't happen by accident).
 
 **Access it at:** `http://<lan-ip-or-localhost>:<port>/mappings` (same host
 and port as the FOH UCI), or from the **Mappings** tab in the UCI. With a

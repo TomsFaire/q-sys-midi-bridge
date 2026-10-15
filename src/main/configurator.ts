@@ -15,6 +15,7 @@ import { isValidPort, stripComments } from './config.js'
 import type { Mapping } from './config.js'
 import { getLanIPv4 } from './network.js'
 import { hashPassword } from './auth.js'
+import { clearMappingsPassword } from './mappings-password.js'
 import {
   PHYSICAL_CONTROLS,
   discoverComponents,
@@ -241,6 +242,9 @@ export class Configurator {
       config.uci = uci
       fs.writeFileSync(this.configFilePath, JSON.stringify(config, null, 2), 'utf-8')
     })
+
+    // ── Remove the password: UCI and mappings editor go back to open ─────────
+    ipcMain.handle('cfg:clear-mappings-password', () => clearMappingsPassword(this.configFilePath))
 
     // ── Whether a mappings-page password has been set yet ───────────────────
     ipcMain.handle('cfg:has-mappings-password', () => !!this.readUciConfig().mappingsPasswordHash)
