@@ -1430,7 +1430,7 @@ function subscribeMeters(controlNames) {
 </div>
 
 <!-- MAPPINGS page: the bridge's own /mappings editor, loaded lazily into an iframe.
-     The server enforces the mappings password; showing this tab is UX only. -->
+     The server enforces the mappings password when one is set; showing this tab is UX only. -->
 <div id="page-mappings" class="page">
   <div id="mappings-message" hidden></div>
   <div id="mappings-frame-host"></div>
@@ -2056,22 +2056,20 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
 // ── Mappings tab ───────────────────────────────────────────────────────────────
 // The tab only exists when this page is served by the bridge, which is the one
 // host that answers /api/mappings/session. Anything else leaves it hidden.
-const MAPPINGS_NEEDS_PASSWORD_TEXT =
-  'Set a mappings password in the desktop app (Configure Mappings, Network) to use this.';
-
 // probe: { status, body } from the session endpoint, or null if the request failed.
 function mappingsTabState(probe) {
   if (!probe || probe.status !== 200) return 'hidden';
   const body = probe.body;
   if (!body || typeof body !== 'object' || typeof body.passwordSet !== 'boolean') return 'hidden';
-  return body.passwordSet ? 'ready' : 'needs-password';
+  // Ready whether or not a password is set: with none, the editor is open and
+  // the editor page itself explains how to set one.
+  return 'ready';
 }
 
 // What the page shows for each state, so it is never blank while the probe runs.
 function mappingsPageView(state) {
   if (state === 'ready') return { message: '', showFrame: true };
   if (state === 'checking') return { message: 'Checking\u2026', showFrame: false };
-  if (state === 'needs-password') return { message: MAPPINGS_NEEDS_PASSWORD_TEXT, showFrame: false };
   return { message: 'The mappings editor is not available from this server.', showFrame: false };
 }
 

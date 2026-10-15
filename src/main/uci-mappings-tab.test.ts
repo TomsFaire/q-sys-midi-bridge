@@ -3,9 +3,10 @@
  *
  * The tab frames the bridge's own /mappings editor. It must appear only when the
  * page is served by the bridge (the one host that answers
- * /api/mappings/session), show a message instead of a 409 page when no password
- * is set, and create the iframe lazily and once so UCI startup is unchanged and
- * unsaved edits survive tab switches.
+ * /api/mappings/session) and create the iframe lazily and once so UCI startup is
+ * unchanged and unsaved edits survive tab switches. With no password set the
+ * editor is open, so the tab loads it either way; the editor page itself shows
+ * the "how to set a password" notice.
  *
  * Like the other UCI tests, these lift the real functions out of the page by
  * source, so they cannot drift from what the browser runs. The framing test
@@ -26,7 +27,7 @@ const UCI_PATH = path.join(__dirname, '..', '..', 'assets', 'uci', 'foh-uci.html
 const html = fs.readFileSync(UCI_PATH, 'utf-8')
 
 type Probe = { status: number; body: unknown } | null
-type State = 'hidden' | 'needs-password' | 'ready'
+type State = 'hidden' | 'ready'
 
 interface FakeEl {
   tag: string
@@ -46,7 +47,7 @@ interface TabLogic {
 
 /** The two pure functions sit between these markers in the page script. */
 function loadLogic(): TabLogic {
-  const start = html.indexOf('const MAPPINGS_NEEDS_PASSWORD_TEXT')
+  const start = html.indexOf('// probe: { status, body }')
   const end = html.indexOf('async function probeMappingsSession')
   assert.ok(start > 0 && end > start, 'mappings tab logic not found in the page')
   const sandbox: Record<string, unknown> = {}
@@ -71,8 +72,8 @@ test('a bridge with a password set shows the tab as ready', () => {
   assert.equal(logic.mappingsTabState({ status: 200, body: { authenticated: false, passwordSet: true } }), 'ready')
 })
 
-test('a bridge with no password set shows the tab with the set-a-password message', () => {
-  assert.equal(logic.mappingsTabState({ status: 200, body: { authenticated: false, passwordSet: false } }), 'needs-password')
+test('a bridge with no password set also shows the tab as ready (the editor is open)', () => {
+  assert.equal(logic.mappingsTabState({ status: 200, body: { authenticated: true, passwordSet: false } }), 'ready')
 })
 
 test('anything that is not the bridge hides the tab', () => {
@@ -130,10 +131,20 @@ test('/mappings is served without frame-blocking headers', async () => {
 
 test('the page never sits blank: every state has a message or the editor', () => {
   assert.equal(logic.mappingsPageView('ready').showFrame, true)
-  for (const state of ['checking', 'needs-password', 'hidden'] as const) {
+  for (const state of ['checking', 'hidden'] as const) {
     const view = logic.mappingsPageView(state)
     assert.equal(view.showFrame, false, state)
     assert.ok(view.message.length > 0, `${state} must explain itself`)
   }
-  assert.match(logic.mappingsPageView('needs-password').message, /mappings password/i)
+})
+
+test('the editor page explains how to set a password without blocking use', () => {
+  const page = fs.readFileSync(path.join(__dirname, '..', '..', 'assets', 'mappings', 'mappings.html'), 'utf-8')
+  const note = page.match(/<div[^>]*id="no-password-note"[^>]*>[\s\S]*?<\/div>/)
+  assert.ok(note, '#no-password-note missing')
+  assert.match(note[0], /class="[^"]*\bhidden\b/, 'hidden until the session says no password is set')
+  assert.match(note[0], /Configure Mappings/)
+  assert.match(note[0], /Network/)
+  // The old behavior disabled sign-in and dead-ended the user.
+  assert.doesNotMatch(page, /login-btn'\)\.disabled = true/)
 })

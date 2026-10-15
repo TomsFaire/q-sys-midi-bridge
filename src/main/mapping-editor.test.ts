@@ -746,6 +746,15 @@ test('mappings page: Refresh Q-Sys calls refreshComponents and never reload', as
   assert.deepEqual(p.calls, ['refreshComponents'])
 })
 
+test('mappings page: with no password set the user goes straight into the editor', async () => {
+  const noPassword = async (url: string) => ({
+    ok: true, status: 200,
+    json: async () => url.endsWith('/session') ? { passwordSet: false, authenticated: true } : {},
+  })
+  const p = await runPageScript(PAGE_HTML, { fetch: noPassword })
+  assert.ok(p.mountOpts(), 'an open server must not dead-end at the login form')
+})
+
 const CONFIGURATOR_HTML = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'renderer', 'configurator.html'), 'utf-8')
 
 function runConfigurator(invoke: (ch: string, ...a: any[]) => any = async () => ({})) {
