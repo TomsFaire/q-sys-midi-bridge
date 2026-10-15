@@ -503,10 +503,12 @@ Mappings** window edits) is also reachable from any browser on the LAN, so
 you don't need physical or remote-desktop access to the Mac to remap a
 control.
 
-**Password (optional):** until you set one, the page is open to anyone who
-can reach it, and shows a small dismissible notice saying how to set one. On
-a shared or untrusted network, open **Configure Mappings… → Network** and set
-a **Mappings Page** password; from then on every route requires sign-in.
+**Password (optional, all or nothing):** until you set one, the UCI mixer,
+its `/qrc` relay and this page are all open to anyone who can reach the bridge,
+and this page shows a small dismissible notice saying how to set one. On a
+shared or untrusted network, open **Configure Mappings… → Network** and set a
+**Mappings Page** password; from then on the UCI and this page both require
+the same sign-in (one password, one 24-hour session per browser).
 
 **Access it at:** `http://<lan-ip-or-localhost>:<port>/mappings` (same host
 and port as the FOH UCI), or from the **Mappings** tab in the UCI. With a

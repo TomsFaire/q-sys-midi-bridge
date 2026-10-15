@@ -8,7 +8,8 @@
  * verbatim from Q-sys-MCP-webUI/backend/src/server.ts (lines 77–121).
  *
  * No Express — a plain http.createServer with these routes:
- *   GET /foh-uci → bundled assets/uci/foh-uci.html
+ *   GET /foh-uci → bundled assets/uci/foh-uci.html (a sign-in page if a
+ *                  mappings password is set and the browser has no session)
  *   GET /shared/<file> → bundled assets/shared/<file> (.js / .css only)
  *   everything else → 404
  *
@@ -24,6 +25,7 @@ import { app } from 'electron'
 import { WebSocketServer, WebSocket } from 'ws'
 import type { QrcCredentials } from './qrc-client.js'
 import type { MappingsHttpHandler } from './mappings-http.js'
+import { UCI_LOGIN_HTML } from './uci-login-page.js'
 
 // Sentinel id for the relay's own Logon call, so its reply can be filtered
 // out of the stream instead of confusing the browser-side UCI.
@@ -156,6 +158,14 @@ export class UciServer extends EventEmitter {
       }
 
       if (req.method === 'GET' && (req.url === '/foh-uci' || req.url?.startsWith('/foh-uci?'))) {
+        // One password for everything: with one set, the mixer needs the same
+        // session as the mappings editor. no-store so the reload after sign-in
+        // is never answered from a cached sign-in page.
+        if (this.mappingsHandler && !this.mappingsHandler.isAuthenticated(req)) {
+          res.writeHead(401, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' })
+          res.end(UCI_LOGIN_HTML)
+          return
+        }
         fs.readFile(uciHtmlPath, (err, data) => {
           if (err) {
             res.writeHead(404, { 'Content-Type': 'text/plain' })
@@ -181,7 +191,19 @@ export class UciServer extends EventEmitter {
     // Browser sends raw JSON-RPC strings; we append \0 and forward to Core.
     // Core responses (split on \0) are forwarded back as WS text frames.
     // ------------------------------------------------------------------
-    const wss = new WebSocketServer({ server, path: '/qrc' })
+    const wss = new WebSocketServer({
+      server,
+      path: '/qrc',
+      // The relay logs on to the Core for the browser, so an unauthenticated
+      // upgrade would be a way around the password. Refuse it here.
+      verifyClient: (info, done) => {
+        if (this.mappingsHandler && !this.mappingsHandler.isAuthenticated(info.req)) {
+          done(false, 401, 'Unauthorized')
+          return
+        }
+        done(true)
+      },
+    })
 
     wss.on('connection', (ws: InstanceType<typeof WebSocket>) => {
       const tcp = new Socket()

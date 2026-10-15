@@ -148,3 +148,18 @@ test('the editor page explains how to set a password without blocking use', () =
   // The old behavior disabled sign-in and dead-ended the user.
   assert.doesNotMatch(page, /login-btn'\)\.disabled = true/)
 })
+
+test('a dropped UCI socket reloads to the sign-in page only when the session is gone', () => {
+  const start = html.indexOf('// uciSessionLost')
+  assert.ok(start > 0, 'uciSessionLost helper missing')
+  const end = html.indexOf('\n}\n', start) + 3
+  const sandbox: Record<string, unknown> = {}
+  vm.runInNewContext(`${html.slice(start, end)}\nthis.fn = uciSessionLost`, sandbox)
+  const lost = sandbox.fn as (info: unknown) => boolean
+  assert.equal(lost({ passwordSet: true, authenticated: false }), true)
+  assert.equal(lost({ passwordSet: true, authenticated: true }), false)
+  assert.equal(lost({ passwordSet: false, authenticated: true }), false, 'open server: never reload')
+  assert.equal(lost(null), false, 'unknown state must not cause a reload loop')
+  assert.equal(lost({}), false)
+  assert.match(html, /ws\.onclose = \(\) => \{[\s\S]{0,400}uciSessionLost/, 'onclose must consult it')
+})

@@ -41,6 +41,13 @@
     33–34 = Rec L/R
 -->
 <script>
+// uciSessionLost: true only when the bridge has a password set and this browser
+// no longer has a session (24h expiry). Unknown state is never "lost", so a
+// failed probe cannot cause a reload loop.
+function uciSessionLost(info) {
+  return !!info && info.passwordSet === true && info.authenticated === false;
+}
+
 // QRCClient — WebSocket wrapper that mirrors the qrc.js API surface.
 // Connects to the /qrc relay endpoint (Node.js Option B, or Lua Option A).
 // Only window.location.host changes between deployment options.
@@ -74,6 +81,12 @@ const QRC = (() => {
 
     ws.onclose = () => {
       emit('close');
+      // With a password set, an expired session makes every reconnect a 401.
+      // Reload instead, so the bridge serves the sign-in page.
+      fetch('/api/mappings/session', { credentials: 'same-origin' })
+        .then(r => r.json())
+        .then(info => { if (uciSessionLost(info)) location.reload(); })
+        .catch(() => {});
       // Reconnect after 2s
       reconnectTimer = setTimeout(() => doConnect(connectUrl), 2000);
     };

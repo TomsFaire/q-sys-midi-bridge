@@ -140,7 +140,7 @@ export class MappingsHttpHandler {
    * one); once a password is set every route needs a session. Read per request,
    * so setting a password takes effect without a restart.
    */
-  private isAuthenticated(req: http.IncomingMessage): boolean {
+  isAuthenticated(req: http.IncomingMessage): boolean {
     return this.isOpen() || this.sessions.isValid(this.getSessionToken(req))
   }
 
