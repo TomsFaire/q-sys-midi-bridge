@@ -2067,6 +2067,14 @@ function mappingsTabState(probe) {
   return body.passwordSet ? 'ready' : 'needs-password';
 }
 
+// What the page shows for each state, so it is never blank while the probe runs.
+function mappingsPageView(state) {
+  if (state === 'ready') return { message: '', showFrame: true };
+  if (state === 'checking') return { message: 'Checking\u2026', showFrame: false };
+  if (state === 'needs-password') return { message: MAPPINGS_NEEDS_PASSWORD_TEXT, showFrame: false };
+  return { message: 'The mappings editor is not available from this server.', showFrame: false };
+}
+
 // Creates the editor iframe on first call only, so UCI startup is unchanged and
 // edits survive switching tabs.
 function ensureMappingsFrame(host, doc) {
@@ -2096,21 +2104,22 @@ async function probeMappingsSession() {
 
 // Re-checks the password state each time the tab opens, so one set after page
 // load is picked up. The iframe is only created once the password is set.
+let mappingsShowSeq = 0;
 async function showMappingsPage() {
   const msg = document.getElementById('mappings-message');
   const host = document.getElementById('mappings-frame-host');
+  const seq = ++mappingsShowSeq;
+  const render = state => {
+    const view = mappingsPageView(state);
+    msg.textContent = view.message;
+    msg.hidden = !view.message;
+    host.hidden = !view.showFrame;
+    if (view.showFrame) ensureMappingsFrame(host, document);
+  };
+  // Keep an already-open editor on screen while re-checking.
+  if (!host.querySelector('iframe')) render('checking');
   const state = mappingsTabState(await probeMappingsSession());
-  if (state === 'ready') {
-    msg.hidden = true;
-    host.hidden = false;
-    ensureMappingsFrame(host, document);
-  } else {
-    msg.textContent = state === 'needs-password'
-      ? MAPPINGS_NEEDS_PASSWORD_TEXT
-      : 'The mappings editor is not available from this server.';
-    msg.hidden = false;
-    host.hidden = true;
-  }
+  if (seq === mappingsShowSeq) render(state);
 }
 
 document.getElementById('tab-mappings').addEventListener('click', showMappingsPage);

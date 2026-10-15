@@ -41,15 +41,16 @@ interface Host extends FakeEl {
 interface TabLogic {
   mappingsTabState(probe: Probe): State
   ensureMappingsFrame(host: Host, doc: { createElement(tag: string): FakeEl }): boolean
+  mappingsPageView(state: State | 'checking'): { message: string; showFrame: boolean }
 }
 
 /** The two pure functions sit between these markers in the page script. */
 function loadLogic(): TabLogic {
-  const start = html.indexOf('// probe: { status, body }')
+  const start = html.indexOf('const MAPPINGS_NEEDS_PASSWORD_TEXT')
   const end = html.indexOf('async function probeMappingsSession')
   assert.ok(start > 0 && end > start, 'mappings tab logic not found in the page')
   const sandbox: Record<string, unknown> = {}
-  vm.runInNewContext(`${html.slice(start, end)}\nthis.out = { mappingsTabState, ensureMappingsFrame }`, sandbox)
+  vm.runInNewContext(`${html.slice(start, end)}\nthis.out = { mappingsTabState, ensureMappingsFrame, mappingsPageView }`, sandbox)
   return sandbox.out as TabLogic
 }
 
@@ -125,4 +126,14 @@ test('/mappings is served without frame-blocking headers', async () => {
   } finally {
     server.close()
   }
+})
+
+test('the page never sits blank: every state has a message or the editor', () => {
+  assert.equal(logic.mappingsPageView('ready').showFrame, true)
+  for (const state of ['checking', 'needs-password', 'hidden'] as const) {
+    const view = logic.mappingsPageView(state)
+    assert.equal(view.showFrame, false, state)
+    assert.ok(view.message.length > 0, `${state} must explain itself`)
+  }
+  assert.match(logic.mappingsPageView('needs-password').message, /mappings password/i)
 })
