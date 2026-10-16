@@ -954,6 +954,14 @@ function subscribeMeters(controlNames) {
   .meters-drawer.half-open   { height: 38vh; }
   .meters-drawer.full-screen { height: 100vh; }
 
+  /* Half-open: the drawer is a fixed overlay, so reserve its height at the
+     bottom of the body. Pages are flex:1, so strips and faders shrink to fit
+     the visible area. Full-screen covers everything, so no reserve there. */
+  body { transition: padding-bottom 250ms ease; }
+  @media (orientation: landscape) {
+    body.drawer-half-open { padding-bottom: 38vh; }
+  }
+
   .meters-handle {
     height: 28px;
     flex-shrink: 0;
@@ -3443,6 +3451,7 @@ function setDrawerState(state) {
   DRAWER_STATES.forEach(s => drawer.classList.remove(s));
   drawer.classList.add(state);
   drawerState = state;
+  document.body.classList.toggle('drawer-half-open', state === 'half-open');
   const split = state !== 'collapsed';
   document.getElementById('meters-handle').classList.toggle('split', split);
   const left = document.getElementById('meters-left');
