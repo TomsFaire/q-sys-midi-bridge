@@ -229,7 +229,7 @@ app.whenReady().then(async () => {
         label: 'Copy UCI Link',
         enabled: !!uciUrl,
         click: () => {
-          if (uciUrl) clipboard.writeText(uciUrl)
+          if (uciUrl) clipboard.writeText(uciUrl).catch(() => {})
         },
       },
       { type: 'separator' },

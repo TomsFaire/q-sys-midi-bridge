@@ -229,7 +229,7 @@
 <script src="../../assets/shared/mapping-editor.js"></script>
 <script>
 /* global require, MappingEditor */
-const { ipcRenderer, clipboard } = require('electron')
+const { ipcRenderer } = require('electron')
 
 // The shared editor owns all table state. This window supplies only transport
 // (IPC to the main process), the status pill and the overlay.
@@ -427,11 +427,11 @@ ipcRenderer.on('cfg:host-connected', async () => {
 })
 
 document.getElementById('net-local-copy').addEventListener('click', () => {
-  clipboard.writeText(document.getElementById('net-local-url').textContent)
+  navigator.clipboard.writeText(document.getElementById('net-local-url').textContent).catch(() => {})
 })
 
 document.getElementById('net-lan-copy').addEventListener('click', () => {
-  clipboard.writeText(document.getElementById('net-lan-url').textContent)
+  navigator.clipboard.writeText(document.getElementById('net-lan-url').textContent).catch(() => {})
 })
 
 document.getElementById('uci-enabled-toggle').addEventListener('change', async e => {
