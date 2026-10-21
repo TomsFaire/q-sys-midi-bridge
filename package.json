@@ -13,11 +13,11 @@
     "package": "npm run build && electron-builder --mac --publish never"
   },
   "devDependencies": {
-    "@electron/rebuild": "^3",
+    "@electron/rebuild": "^4.2.1",
     "@types/node": "^20",
     "@types/ws": "^8.18.1",
-    "electron": "^33",
-    "electron-builder": "^24",
+    "electron": "^45.0.0",
+    "electron-builder": "^26.15.3",
     "typescript": "^5"
   },
   "dependencies": {
